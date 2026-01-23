@@ -1,0 +1,52 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          Int          @id @default(autoincrement())
+  email       String       @unique
+  password    String
+  name        String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  connections Connection[]
+  canvases    Canvas[]
+}
+
+model Connection {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String   // pg, mysql2, etc.
+  host      String
+  port      Int
+  user      String   // DB username
+  password  String   // DB password
+  database  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  canvases  Canvas[]
+  
+  ownerId   Int?
+  owner     User?    @relation(fields: [ownerId], references: [id])
+}
+
+model Canvas {
+  id           Int         @id @default(autoincrement())
+  name         String
+  data         Json
+  connectionId Int?
+  connection   Connection? @relation(fields: [connectionId], references: [id])
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  
+  ownerId      Int?
+  owner        User?       @relation(fields: [ownerId], references: [id])
+}
