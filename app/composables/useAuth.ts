@@ -1,0 +1,41 @@
+export const useAuth = () => {
+  const user = useState<any>('user', () => null)
+
+  const fetchUser = async () => {
+    try {
+      user.value = await $fetch('/api/auth/me')
+    } catch (e) {
+      user.value = null
+    }
+  }
+
+  const login = async (email, password) => {
+    const data = await $fetch('/api/auth/login', {
+      method: 'POST',
+      body: { email, password }
+    })
+    user.value = data
+  }
+  
+  const register = async (email, password, name) => {
+    const data = await $fetch('/api/auth/register', {
+      method: 'POST',
+      body: { email, password, name }
+    })
+    user.value = data
+  }
+
+  const logout = async () => {
+    await $fetch('/api/auth/logout', { method: 'POST' })
+    user.value = null
+    navigateTo('/login')
+  }
+
+  return {
+    user,
+    fetchUser,
+    login,
+    register,
+    logout
+  }
+}
