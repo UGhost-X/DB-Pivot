@@ -102,6 +102,12 @@ const toggleHidden = (colName: string) => {
           :position="Position.Left" 
           class="!opacity-0 group-hover:!opacity-100 !w-2 !h-2 !-left-1 !bg-blue-500 !border-none transition-opacity" 
         />
+        <Handle 
+          :id="`${col.name}-source`"
+          type="source" 
+          :position="Position.Right" 
+          class="!opacity-0 group-hover:!opacity-100 !w-2 !h-2 !-right-1 !bg-blue-500 !border-none transition-opacity" 
+        />
         
         <div class="flex items-center gap-1.5 overflow-hidden flex-1">
           <!-- Icons (Azimutt inspired) -->

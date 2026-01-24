@@ -44,7 +44,7 @@ const { register } = useAuth()
 const handleRegister = async () => {
   try {
     await register(email.value, password.value, name.value)
-    navigateTo('/')
+    navigateTo('/projects')
   } catch (error) {
     toast.error('Registration Failed', { description: String(error) })
   }

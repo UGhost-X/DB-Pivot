@@ -22,7 +22,7 @@ export const createSession = (event: H3Event, user: any) => {
   })
 }
 
-export const clearSession = (event: H3Event) => {
+export const clearUserSession = (event: H3Event) => {
   deleteCookie(event, 'auth_token')
 }
 

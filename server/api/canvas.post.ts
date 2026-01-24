@@ -3,7 +3,7 @@ import prisma from '../utils/prisma'
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
   const body = await readBody(event)
-  const { name, data, connectionId } = body
+  const { name, data, connectionId, projectId } = body
 
   if (!data) {
     throw createError({
@@ -18,7 +18,8 @@ export default defineEventHandler(async (event) => {
         name: name || 'Untitled Project',
         data,
         connectionId: connectionId ? parseInt(connectionId) : undefined,
-        ownerId: user.id
+        ownerId: user.id,
+        projectId: projectId ? parseInt(projectId) : undefined
       },
     })
     return { success: true, data: canvas }

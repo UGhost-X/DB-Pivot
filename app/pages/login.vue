@@ -39,7 +39,7 @@ const { login } = useAuth()
 const handleLogin = async () => {
   try {
     await login(email.value, password.value)
-    navigateTo('/')
+    navigateTo('/projects')
   } catch (error) {
     toast.error('Login Failed', { description: String(error) })
   }

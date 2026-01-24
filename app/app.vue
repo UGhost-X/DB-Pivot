@@ -18,6 +18,8 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 </script>
 
 <style>
+@import 'vue-sonner/style.css';
+
 body {
   margin: 0;
   overflow: hidden;

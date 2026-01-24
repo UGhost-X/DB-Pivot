@@ -3,7 +3,7 @@ import prisma from '../utils/prisma'
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
   const body = await readBody(event)
-  const { name, type, host, port, user: dbUser, password, database } = body
+  const { name, type, host, port, user: dbUser, password, database, projectId } = body
 
   if (!type || !host || !dbUser || !database) {
     throw createError({
@@ -22,7 +22,8 @@ export default defineEventHandler(async (event) => {
         user: dbUser,
         password,
         database,
-        ownerId: user.id
+        ownerId: user.id,
+        projectId: projectId ? parseInt(projectId) : undefined
       },
     })
     return { success: true, data: connection }
