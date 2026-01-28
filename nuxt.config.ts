@@ -1,3 +1,4 @@
+import svgLoader from 'vite-svg-loader'
 import { fileURLToPath } from 'url'
 
 // https://nuxt.com/docs/api/configuration/nuxt-config
@@ -18,10 +19,11 @@ export default defineNuxtConfig({
   },
   vite: {
     plugins: [
+      svgLoader(),
       {
         name: 'nuxt-asset-root-guard',
-        configureServer(server) {
-          server.middlewares.use((req, res, next) => {
+        configureServer(server: any) {
+          server.middlewares.use((req: any, res: any, next: any) => {
             if (req.url === '/_nuxt' || req.url === '/_nuxt/') {
               res.statusCode = 204
               return res.end('')
@@ -32,4 +34,4 @@ export default defineNuxtConfig({
       }
     ]
   }
-})
+} as any)

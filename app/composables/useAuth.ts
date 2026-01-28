@@ -10,7 +10,7 @@ export const useAuth = () => {
     }
   }
 
-  const login = async (email, password) => {
+  const login = async (email: string, password: string) => {
     const data = await $fetch('/api/auth/login', {
       method: 'POST',
       body: { email, password }
@@ -18,7 +18,7 @@ export const useAuth = () => {
     user.value = data
   }
   
-  const register = async (email, password, name) => {
+  const register = async (email: string, password: string, name: string) => {
     const data = await $fetch('/api/auth/register', {
       method: 'POST',
       body: { email, password, name }

@@ -52,6 +52,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "prisma": "^5.22.0",
     "shadcn-nuxt": "^2.4.3",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "vite-svg-loader": "^5.1.0"
   }
 }

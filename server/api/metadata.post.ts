@@ -11,11 +11,14 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  const defaultPort =
+    type === 'pg' ? 5432 : type === 'mysql' || type === 'mysql2' ? 3306 : 5432
+
   const client = knex({
     client: type,
     connection: {
       host,
-      port: parseInt(port) || 5432,
+      port: parseInt(port) || defaultPort,
       user,
       password,
       database,
@@ -28,6 +31,7 @@ export default defineEventHandler(async (event) => {
     if (type === 'pg') {
       const result = await client.raw(`
         SELECT 
+          cols.table_schema,
           cols.table_name, 
           cols.column_name, 
           cols.data_type,
@@ -36,27 +40,60 @@ export default defineEventHandler(async (event) => {
             SELECT 1 FROM information_schema.table_constraints tc 
             JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name 
             WHERE tc.constraint_type = 'PRIMARY KEY' 
+              AND tc.table_schema = cols.table_schema
               AND tc.table_name = cols.table_name 
+              AND kcu.table_schema = cols.table_schema
               AND kcu.column_name = cols.column_name
           ) as is_primary_key,
           EXISTS (
             SELECT 1 FROM information_schema.table_constraints tc 
             JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name 
             WHERE tc.constraint_type = 'FOREIGN KEY' 
+              AND tc.table_schema = cols.table_schema
               AND tc.table_name = cols.table_name 
+              AND kcu.table_schema = cols.table_schema
               AND kcu.column_name = cols.column_name
           ) as is_foreign_key
         FROM information_schema.columns cols
-        WHERE cols.table_schema = 'public'
-        ORDER BY cols.table_name, cols.ordinal_position;
+        WHERE cols.table_schema NOT IN ('information_schema', 'pg_catalog')
+        ORDER BY cols.table_schema, cols.table_name, cols.ordinal_position;
       `)
       rows = result.rows
     } else if (type === 'mysql' || type === 'mysql2') {
       const result = await client.raw(`
-        SELECT TABLE_NAME as table_name, COLUMN_NAME as column_name, DATA_TYPE as data_type
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = ?
-        ORDER BY TABLE_NAME, ORDINAL_POSITION;
+        SELECT 
+          cols.TABLE_SCHEMA as table_schema,
+          cols.TABLE_NAME as table_name, 
+          cols.COLUMN_NAME as column_name, 
+          cols.DATA_TYPE as data_type,
+          cols.IS_NULLABLE as is_nullable,
+          EXISTS (
+            SELECT 1
+            FROM information_schema.TABLE_CONSTRAINTS tc
+            JOIN information_schema.KEY_COLUMN_USAGE kcu
+              ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+              AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+              AND tc.TABLE_NAME = kcu.TABLE_NAME
+            WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+              AND tc.TABLE_SCHEMA = cols.TABLE_SCHEMA
+              AND tc.TABLE_NAME = cols.TABLE_NAME
+              AND kcu.COLUMN_NAME = cols.COLUMN_NAME
+          ) as is_primary_key,
+          EXISTS (
+            SELECT 1
+            FROM information_schema.TABLE_CONSTRAINTS tc
+            JOIN information_schema.KEY_COLUMN_USAGE kcu
+              ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+              AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+              AND tc.TABLE_NAME = kcu.TABLE_NAME
+            WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+              AND tc.TABLE_SCHEMA = cols.TABLE_SCHEMA
+              AND tc.TABLE_NAME = cols.TABLE_NAME
+              AND kcu.COLUMN_NAME = cols.COLUMN_NAME
+          ) as is_foreign_key
+        FROM INFORMATION_SCHEMA.COLUMNS cols
+        WHERE cols.TABLE_SCHEMA = ?
+        ORDER BY cols.TABLE_SCHEMA, cols.TABLE_NAME, cols.ORDINAL_POSITION;
       `, [database])
       rows = result[0]
     } else {
@@ -69,9 +106,11 @@ export default defineEventHandler(async (event) => {
     // Process rows into a structured format
     // { [tableName]: { columns: [{ name, type }] } }
     const tables: Record<string, any[]> = {}
+    const schemas: Record<string, string[]> = {}
     
     for (const row of rows) {
         const tableName = row.table_name
+        const schemaName = row.table_schema || 'public'
         if (!tables[tableName]) {
             tables[tableName] = []
         }
@@ -79,14 +118,27 @@ export default defineEventHandler(async (event) => {
             name: row.column_name,
             type: row.data_type,
             nullable: row.is_nullable === 'YES',
-            isPrimaryKey: row.is_primary_key,
-            isForeignKey: row.is_foreign_key
+            isPrimaryKey: Boolean(row.is_primary_key),
+            isForeignKey: Boolean(row.is_foreign_key)
         })
+
+        if (!schemas[schemaName]) schemas[schemaName] = []
+        if (!schemas[schemaName].includes(tableName)) schemas[schemaName].push(tableName)
     }
 
-    return { success: true, data: tables }
+    const tree = {
+      database,
+      schemas: Object.fromEntries(
+        Object.entries(schemas).map(([schemaName, tableNames]) => [
+          schemaName,
+          { tables: tableNames.sort((a, b) => a.localeCompare(b)) },
+        ])
+      ),
+    }
 
-  } catch (error) {
+    return { success: true, data: tables, tree }
+
+  } catch (error: any) {
     console.error('Database connection error:', error)
     throw createError({
         statusCode: 500,

@@ -84,7 +84,7 @@ const newProject = ref({
 const fetchProjects = async () => {
   isLoadingProjects.value = true
   try {
-    const res = await $fetch('/api/projects')
+    const res: any = await $fetch('/api/projects')
     if (res.success) {
       projects.value = res.data
     }
@@ -98,7 +98,7 @@ const fetchProjects = async () => {
 const createProject = async () => {
   isLoading.value = true
   try {
-    const res = await $fetch('/api/projects', {
+    const res: any = await $fetch('/api/projects', {
       method: 'POST',
       body: newProject.value
     })
