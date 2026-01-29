@@ -29,6 +29,8 @@ import {
   ChevronsRight,
   ChevronRight,
   Database,
+  Folder,
+  FolderOpen,
   User,
   Moon,
   Sun
@@ -62,6 +64,11 @@ const projectCount = computed(() => projects.value.length)
 
 const toggleCollapse = () => {
   emit('update:isCollapsed', !props.isCollapsed)
+}
+
+const loadProjects = () => {
+  fetchProjects()
+  isProjectsMenuOpen.value = true
 }
 
 const fetchProjects = async () => {
@@ -107,26 +114,10 @@ onMounted(() => {
          <Database class="h-6 w-6 text-primary" />
       </div>
       
-      <Button 
-        v-if="!isCollapsed" 
-        variant="ghost" 
-        size="icon" 
-        class="h-8 w-8 text-muted-foreground" 
-        @click="toggleCollapse"
-      >
-        <ChevronsLeft class="h-4 w-4" />
-      </Button>
-    </div>
-
-    <!-- Collapsed Toggle Button -->
-    <div v-if="isCollapsed" class="flex justify-center py-2 border-b border-border/40 shrink-0">
-       <Button variant="ghost" size="icon" class="h-8 w-8 text-muted-foreground" @click="toggleCollapse">
-          <ChevronsRight class="h-4 w-4" />
-       </Button>
     </div>
 
     <!-- Navigation -->
-    <div class="flex-1 py-4 flex flex-col gap-2 px-2 overflow-y-auto">
+    <div class="flex-1 py-4 flex flex-col gap-2 px-2">
       <TooltipProvider :delay-duration="0">
         <Tooltip>
           <TooltipTrigger as-child>
@@ -175,8 +166,9 @@ onMounted(() => {
             <DropdownMenuSeparator />
 
             <DropdownMenuGroup>
-              <DropdownMenuItem @select="router.push('/projects')">
-                <span>{{ t('projects.goToProjects') }}</span>
+              <DropdownMenuItem @select="loadProjects">
+                <FolderOpen class="mr-2 h-4 w-4" />
+                <span>{{ t('projects.loadProject') }}</span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
 
@@ -191,7 +183,10 @@ onMounted(() => {
                 class="flex items-center justify-between"
                 @select="router.push(`/?projectId=${p.id}`)"
               >
-                <span class="truncate">{{ p.name }}</span>
+                <div class="flex items-center gap-2 min-w-0">
+                  <Folder class="h-4 w-4 shrink-0" />
+                  <span class="truncate">{{ p.name }}</span>
+                </div>
               </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
@@ -219,13 +214,13 @@ onMounted(() => {
           </Button>
 
           <div v-if="isProjectsMenuOpen" class="pl-9 pr-2 space-y-1 animate-in slide-in-from-top-2 fade-in-50 duration-200">
-             <div 
+             <div
                class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50 text-sm text-muted-foreground cursor-pointer transition-colors"
-               @click="router.push('/projects')"
+               @click="loadProjects"
              >
-               <span class="truncate">{{ t('projects.goToProjects') }}</span>
+               <FolderOpen class="h-3.5 w-3.5 shrink-0" />
+               <span class="truncate">{{ t('projects.loadProject') }}</span>
              </div>
-             
              <div v-if="isLoadingProjects" class="px-2 py-1 text-xs text-muted-foreground">{{ t('projects.loading') }}</div>
              <div v-else-if="projects.length === 0" class="px-2 py-1 text-xs text-muted-foreground">{{ t('projects.empty') }}</div>
              <template v-else>
@@ -235,12 +230,22 @@ onMounted(() => {
                  class="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-muted/50 text-sm text-muted-foreground cursor-pointer transition-colors"
                  @click="router.push(`/?projectId=${p.id}`)"
                >
-                 <span class="truncate">{{ p.name }}</span>
+                 <div class="flex items-center gap-2 min-w-0">
+                   <Folder class="h-3.5 w-3.5 shrink-0" />
+                   <span class="truncate">{{ p.name }}</span>
+                 </div>
                </div>
              </template>
           </div>
         </div>
       </TooltipProvider>
+    </div>
+
+    <div class="flex justify-center py-2 border-t border-border/40 shrink-0">
+      <Button variant="ghost" size="icon" class="h-8 w-8 text-muted-foreground" @click="toggleCollapse">
+        <ChevronsLeft v-if="!isCollapsed" class="h-4 w-4" />
+        <ChevronsRight v-else class="h-4 w-4" />
+      </Button>
     </div>
 
     <!-- Footer -->

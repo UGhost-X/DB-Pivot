@@ -13,7 +13,6 @@ import {
   XCircle, 
   MoreHorizontal, 
   Plus,
-  PanelLeftClose,
   ChevronRight,
   Database,
   Table,
@@ -83,8 +82,9 @@ const toggleConnection = (connId: number) => {
   expandedConnections.value[connId] = !expandedConnections.value[connId]
 }
 
-const toggleNode = (key: string) => {
-  expandedNodes.value[key] = !expandedNodes.value[key]
+const toggleNode = (key: string, defaultValue = true) => {
+  const current = isNodeOpen(key, defaultValue)
+  expandedNodes.value[key] = !current
 }
 
 const isNodeOpen = (key: string, defaultValue = true) => {
@@ -99,6 +99,9 @@ const filterTableNames = (tableNames: string[]) => {
 }
 
 const expandedTables = ref<Set<string>>(new Set())
+const isAddedOpen = ref(true)
+const isUnaddedOpen = ref(true)
+
 const toggleTable = (tableName: string) => {
   if (expandedTables.value.has(tableName)) {
     expandedTables.value.delete(tableName)
@@ -147,9 +150,6 @@ const getAvailableTables = (tables: string[]) => {
       <!-- Header -->
       <div class="p-4 border-b border-border/40 flex items-center justify-between shrink-0">
         <div class="font-semibold text-sm">{{ t('sidebar.explorer') }}</div>
-        <Button variant="ghost" size="icon" class="h-6 w-6" @click="emit('close')">
-          <PanelLeftClose class="h-4 w-4" />
-        </Button>
       </div>
 
       <!-- Search -->
@@ -182,8 +182,8 @@ const getAvailableTables = (tables: string[]) => {
                   @contextmenu.prevent="emit('connection-context-menu', { event: $event, conn })"
                 >
                   <div
-                    class="p-2 rounded-md text-sm cursor-pointer transition-colors relative group"
-                    :class="currentConnectionId === conn.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50 text-muted-foreground'"
+                    class="p-2 rounded-md text-sm cursor-pointer transition-colors relative group hover:bg-muted/50"
+                    :class="currentConnectionId === conn.id ? 'text-foreground' : 'text-muted-foreground'"
                     @click="emit('select-connection', conn); toggleConnection(conn.id)"
                     @vue:mounted="ensureExpanded(conn.id)"
                   >
@@ -243,7 +243,7 @@ const getAvailableTables = (tables: string[]) => {
                         >
                           <div
                             class="flex items-center gap-2 py-1.5 px-2 rounded-md cursor-pointer hover:bg-muted/50 text-sm text-muted-foreground transition-colors"
-                            @click="toggleNode(`conn:${conn.id}:schema:${schemaName}`)"
+                            @click="toggleNode(`conn:${conn.id}:schema:${schemaName}`, schemaName === 'public')"
                           >
                             <ChevronRight
                               class="h-3.5 w-3.5 transition-transform duration-200 ease-out"
@@ -264,14 +264,23 @@ const getAvailableTables = (tables: string[]) => {
                             <div v-show="isNodeOpen(`conn:${conn.id}:schema:${schemaName}`, schemaName === 'public')" class="pl-5 overflow-hidden">
                               <!-- Added Tables -->
                               <div v-if="getAddedTables(schema.tables).length > 0">
-                                <div class="px-2 py-1 text-[10px] font-semibold text-muted-foreground">{{ t('sidebar.added') }}</div>
-                                <div
+                                <div 
+                                  class="px-2 py-1 text-[10px] font-semibold text-muted-foreground flex items-center gap-1 cursor-pointer hover:text-foreground transition-colors"
+                                  @click="isAddedOpen = !isAddedOpen"
+                                >
+                                  <ChevronRight class="w-3 h-3 transition-transform duration-200" :class="{ 'rotate-90': isAddedOpen }" />
+                                  {{ t('sidebar.added') }}
+                                </div>
+                                <div v-show="isAddedOpen">
+                                  <div
                                     v-for="tableName in getAddedTables(schema.tables)"
                                     :key="`${schemaName}:${tableName}`"
-                                    class="group rounded-md text-sm cursor-pointer flex flex-col transition-colors text-muted-foreground"
-                                    @click="toggleTable(tableName)"
+                                    class="group rounded-md text-sm flex flex-col transition-colors text-muted-foreground"
                                   >
-                                    <div class="flex items-center justify-between w-full py-1.5 px-2 hover:bg-muted/50 rounded-md transition-colors">
+                                    <div 
+                                      class="flex items-center justify-between w-full py-1.5 px-2 hover:bg-muted/50 rounded-md transition-colors cursor-pointer"
+                                      @click="toggleTable(tableName)"
+                                    >
                                       <div class="flex items-center gap-2 overflow-hidden">
                                         <ChevronRight 
                                           class="w-3 h-3 transition-transform duration-200"
@@ -282,15 +291,17 @@ const getAvailableTables = (tables: string[]) => {
                                       </div>
                                     </div>
                                   
-                                  <!-- Columns List -->
-                                  <div v-if="expandedTables.has(tableName) && props.tablesData?.[tableName]" class="pl-5 mt-1 space-y-0.5 border-l border-border/50 ml-1.5">
-                                    <div 
-                                      v-for="col in props.tablesData[tableName]" 
-                                      :key="col.name"
-                                      class="flex items-center gap-2 text-xs py-1 text-muted-foreground"
-                                    >
-                                      <component :is="getColumnIcon(col)" class="w-3 h-3 shrink-0 opacity-70" />
-                                      <span class="truncate">{{ col.name }}</span>
+                                    <!-- Columns List -->
+                                    <div v-if="expandedTables.has(tableName) && props.tablesData?.[tableName]" class="pl-5 mt-1 space-y-0.5 border-l border-border/50 ml-1.5">
+                                      <div 
+                                        v-for="col in props.tablesData[tableName]" 
+                                        :key="col.name"
+                                        class="flex items-center gap-2 text-xs py-1 text-muted-foreground relative group/col"
+                                      >
+                                        <div class="absolute inset-0 bg-muted/50 opacity-0 group-hover/col:opacity-100 transition-opacity rounded-sm pointer-events-none" />
+                                        <component :is="getColumnIcon(col)" class="w-3 h-3 shrink-0 opacity-70 relative z-10" />
+                                        <span class="truncate relative z-10">{{ col.name }}</span>
+                                      </div>
                                     </div>
                                   </div>
                                 </div>
@@ -298,39 +309,49 @@ const getAvailableTables = (tables: string[]) => {
 
                               <!-- Available Tables -->
                               <div v-if="getAvailableTables(schema.tables).length > 0">
-                                <div class="px-2 py-1 text-[10px] font-semibold text-muted-foreground" :class="{'mt-2': getAddedTables(schema.tables).length > 0}">{{ t('sidebar.unadded') }}</div>
-                                <div
-                                  v-for="tableName in getAvailableTables(schema.tables)"
-                                  :key="`${schemaName}:${tableName}`"
-                                  class="group flex flex-col transition-colors rounded-md text-muted-foreground"
+                                <div 
+                                  class="px-2 py-1 text-[10px] font-semibold text-muted-foreground flex items-center gap-1 cursor-pointer hover:text-foreground transition-colors"
+                                  :class="{'mt-2': getAddedTables(schema.tables).length > 0}"
+                                  @click="isUnaddedOpen = !isUnaddedOpen"
                                 >
-                                  <div 
-                                    class="py-1.5 px-2 flex items-center justify-between cursor-pointer w-full hover:bg-muted/50 rounded-md transition-colors"
-                                    @click.stop="toggleTable(tableName)"
+                                  <ChevronRight class="w-3 h-3 transition-transform duration-200" :class="{ 'rotate-90': isUnaddedOpen }" />
+                                  {{ t('sidebar.unadded') }}
+                                </div>
+                                <div v-show="isUnaddedOpen">
+                                  <div
+                                    v-for="tableName in getAvailableTables(schema.tables)"
+                                    :key="`${schemaName}:${tableName}`"
+                                    class="group flex flex-col transition-colors rounded-md text-muted-foreground"
                                   >
-                                    <div class="flex items-center gap-2 overflow-hidden">
-                                      <ChevronRight 
-                                        class="w-3 h-3 transition-transform duration-200"
-                                        :class="{ 'rotate-90': expandedTables.has(tableName) }"
-                                      />
-                                      <Table class="w-3 h-3 shrink-0" />
-                                      <span class="truncate" :title="tableName">{{ tableName }}</span>
-                                    </div>
-                                    
-                                    <div class="flex items-center" @click.stop="emit('add-table', tableName)">
-                                      <Plus class="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity hover:scale-125" />
-                                    </div>
-                                  </div>
-
-                                  <!-- Columns List -->
-                                  <div v-if="expandedTables.has(tableName) && props.tablesData?.[tableName]" class="pl-7 pb-1 space-y-0.5 border-l border-border/50 ml-3.5 mb-1">
                                     <div 
-                                      v-for="col in props.tablesData[tableName]" 
-                                      :key="col.name"
-                                      class="flex items-center gap-2 text-xs py-0.5 text-muted-foreground/70"
+                                      class="py-1.5 px-2 flex items-center justify-between cursor-pointer w-full hover:bg-muted/50 rounded-md transition-colors"
+                                      @click.stop="toggleTable(tableName)"
                                     >
-                                      <component :is="getColumnIcon(col)" class="w-3 h-3 shrink-0 opacity-70" />
-                                      <span class="truncate" :title="col.name">{{ col.name }}</span>
+                                      <div class="flex items-center gap-2 overflow-hidden">
+                                        <ChevronRight 
+                                          class="w-3 h-3 transition-transform duration-200"
+                                          :class="{ 'rotate-90': expandedTables.has(tableName) }"
+                                        />
+                                        <Table class="w-3 h-3 shrink-0" />
+                                        <span class="truncate" :title="tableName">{{ tableName }}</span>
+                                      </div>
+                                      
+                                      <div class="flex items-center" @click.stop="emit('add-table', tableName)">
+                                        <Plus class="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity hover:scale-125" />
+                                      </div>
+                                    </div>
+
+                                    <!-- Columns List -->
+                                    <div v-if="expandedTables.has(tableName) && props.tablesData?.[tableName]" class="pl-7 pb-1 space-y-0.5 border-l border-border/50 ml-3.5 mb-1">
+                                      <div 
+                                        v-for="col in props.tablesData[tableName]" 
+                                        :key="col.name"
+                                        class="flex items-center gap-2 text-xs py-0.5 text-muted-foreground/70 relative group/col"
+                                      >
+                                        <div class="absolute inset-0 bg-muted/50 opacity-0 group-hover/col:opacity-100 transition-opacity rounded-sm pointer-events-none" />
+                                        <component :is="getColumnIcon(col)" class="w-3 h-3 shrink-0 opacity-70 relative z-10" />
+                                        <span class="truncate relative z-10" :title="col.name">{{ col.name }}</span>
+                                      </div>
                                     </div>
                                   </div>
                                 </div>

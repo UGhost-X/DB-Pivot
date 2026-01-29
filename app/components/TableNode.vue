@@ -52,7 +52,6 @@ const handleDblClick = (event: MouseEvent, col: any) => {
 
 const handleClick = (event: MouseEvent, col: any) => {
   if (props.data.onClick) {
-    event.stopPropagation()
     props.data.onClick({ event, column: col, tableName: props.data.label })
   }
 }

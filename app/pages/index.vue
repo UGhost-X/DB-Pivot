@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, markRaw, watch, nextTick } from 'vue'
 import { VueFlow, useVueFlow, type Node, type Edge, type Connection } from '@vue-flow/core'
+import dagre from 'dagre'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import TableNode from '@/components/TableNode.vue'
@@ -14,9 +15,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from 'vue-sonner'
 import { 
   Plus, CloudUpload, Maximize, Minus, 
-  RotateCw, Trash2, Link, EyeOff, FileCode,
+  Trash2, Link, EyeOff, FileCode,
   Loader2, Pencil, Activity,
-  History, PanelLeft
+  History, LayoutGrid, Undo2, Redo2, Hand, MousePointer2, PanelLeftOpen, PanelLeftClose
 } from 'lucide-vue-next'
 import { generateSQL } from '@/utils/sqlGenerator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -26,7 +27,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useAuth } from '@/composables/useAuth'
 import { useI18n } from '@/composables/useI18n'
 
-const { nodes, addNodes, toObject, fromObject, setNodes, setEdges, zoomIn, zoomOut, fitView, viewport, setViewport, addEdges, removeNodes, removeEdges, findNode, onPaneReady, onNodesChange, onEdgesChange, onPaneMouseMove, screenToFlowCoordinate, onPaneClick, onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu, onMoveEnd, onEdgeDoubleClick } = useVueFlow()
+const { nodes, edges, addNodes, toObject, fromObject, setNodes, setEdges, zoomIn, zoomOut, fitView, viewport, setViewport, addEdges, removeNodes, removeEdges, findNode, onPaneReady, onNodesChange, onEdgesChange, onPaneMouseMove, screenToFlowCoordinate, onPaneClick, onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu, onMoveEnd, onEdgeDoubleClick } = useVueFlow()
 const { user, logout } = useAuth()
 const { t } = useI18n()
 const route = useRoute()
@@ -48,6 +49,13 @@ const isRestoringCanvas = ref(false)
 // Layout State
 const isAppSidebarCollapsed = ref(false)
 const isCanvasSidebarOpen = ref(true)
+const interactionMode = ref<'pointer' | 'hand'>('pointer')
+
+const historyStack = ref<any[]>([])
+const redoStack = ref<any[]>([])
+const isApplyingHistory = ref(false)
+const canUndo = computed(() => historyStack.value.length > 1)
+const canRedo = computed(() => redoStack.value.length > 0)
 
 // Version Control
 const isHistoryDialogOpen = ref(false)
@@ -82,7 +90,33 @@ onPaneReady(() => {
     
     pendingCanvasData.value = null
   }
+  nextTick(() => resetHistory())
+
+  // Add keyboard listener for delete
+  window.addEventListener('keydown', handleKeyDown)
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeyDown)
+})
+
+const handleKeyDown = (e: KeyboardEvent) => {
+  if (['Delete', 'Backspace'].includes(e.key)) {
+    // Avoid deleting when typing in inputs
+    if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return
+    
+    const selectedNodes = nodes.value.filter(n => n.selected)
+    const selectedEdges = edges.value.filter(e => e.selected)
+    
+    if (selectedNodes.length > 0) {
+      removeNodes(selectedNodes.map(n => n.id))
+    }
+    
+    if (selectedEdges.length > 0) {
+      removeEdges(selectedEdges.map(e => e.id))
+    }
+  }
+}
 
 onPaneMouseMove((event) => {
   if (connectingState.value.active) {
@@ -176,7 +210,8 @@ const updateEdgeHighlights = () => {
         ? (edge.source === `table-${hovered.tableName}` && edge.sourceHandle === `${hovered.columnName}-source`) ||
           (edge.target === `table-${hovered.tableName}` && edge.targetHandle === `${hovered.columnName}-target`)
         : false
-      const isSelectedMatch = selectedNodeIds.size > 0 && (selectedNodeIds.has(edge.source) || selectedNodeIds.has(edge.target))
+      // Only highlight on hover, not on selection
+      const isSelectedMatch = false 
       const nextClass = isHoverMatch || isSelectedMatch ? 'edge-active' : 'edge-muted'
       const currentStrokeWidth =
         typeof edge.style === 'object' && edge.style && 'strokeWidth' in edge.style
@@ -277,9 +312,11 @@ const loadProject = async () => {
 
         const defaultConn = stored || existing || savedConnections.value[0]
         if (defaultConn) {
-          currentConnectionId.value = defaultConn.id
-          dbConfig.value = { ...defaultConn }
-          await connectDB()
+          if (defaultConn.id !== currentConnectionId.value || !tables.value || Object.keys(tables.value).length === 0) {
+            currentConnectionId.value = defaultConn.id
+            dbConfig.value = { ...defaultConn }
+            await connectDB()
+          }
         }
       }
     }
@@ -295,6 +332,7 @@ const loadProject = async () => {
           hydrateTableNodes()
           applyEdgeDefaults()
           isRestoringCanvas.value = false
+          nextTick(() => resetHistory())
           // Only fit view if no viewport data is present (backwards compatibility)
           if (!canvasRes.data.data.viewport && typeof canvasRes.data.data.zoom === 'undefined') {
             setTimeout(() => fitView(), 100)
@@ -308,6 +346,93 @@ const loadProject = async () => {
     console.error('Failed to load project data', error)
     toast.error(t('toast.loadProjectFailed'))
   }
+}
+
+const resetHistory = () => {
+  historyStack.value = [toObject()]
+  redoStack.value = []
+}
+
+const captureSnapshot = () => {
+  if (isRestoringCanvas.value || isApplyingHistory.value) return
+  historyStack.value.push(toObject())
+  if (historyStack.value.length > 50) {
+    historyStack.value.shift()
+  }
+  redoStack.value = []
+}
+
+const scheduleSnapshot = useDebounceFn(() => {
+  if (isApplyingHistory.value) return
+  captureSnapshot()
+}, 200)
+
+const undo = () => {
+  if (historyStack.value.length <= 1) return
+  const current = historyStack.value.pop()
+  if (current) redoStack.value.push(current)
+  const previous = historyStack.value[historyStack.value.length - 1]
+  if (!previous) return
+  isApplyingHistory.value = true
+  fromObject(previous)
+  hydrateTableNodes()
+  applyEdgeDefaults()
+  nextTick(() => {
+    isApplyingHistory.value = false
+  })
+}
+
+const redo = () => {
+  if (redoStack.value.length === 0) return
+  const nextState = redoStack.value.pop()
+  if (!nextState) return
+  historyStack.value.push(nextState)
+  isApplyingHistory.value = true
+  fromObject(nextState)
+  hydrateTableNodes()
+  applyEdgeDefaults()
+  nextTick(() => {
+    isApplyingHistory.value = false
+  })
+}
+
+const organizeNodes = () => {
+  if (!nodes.value.length) return
+  
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({ rankdir: 'LR', align: 'DL', nodesep: 50, ranksep: 100 })
+  g.setDefaultEdgeLabel(() => ({}))
+
+  nodes.value.forEach((node) => {
+    const width = node.dimensions?.width || 250
+    const height = node.dimensions?.height || 300
+    g.setNode(node.id, { width, height })
+  })
+
+  edges.value.forEach((edge) => {
+    g.setEdge(edge.source, edge.target)
+  })
+
+  dagre.layout(g)
+
+  setNodes((current) =>
+    current.map((node) => {
+      const pos = g.node(node.id)
+      if (!pos) return node
+      return {
+        ...node,
+        position: { 
+          x: pos.x - (node.dimensions?.width || 250) / 2,
+          y: pos.y - (node.dimensions?.height || 300) / 2
+        }
+      }
+    })
+  )
+  
+  nextTick(() => {
+    fitView({ padding: 0.2 })
+    captureSnapshot()
+  })
 }
 
 // Auto Save Logic
@@ -344,6 +469,10 @@ onNodesChange((changes) => {
   if (hasSelectionChange) {
     updateEdgeHighlights()
   }
+  const hasStructuralChange = changes.some((c) => c.type !== 'select')
+  if (hasStructuralChange) {
+    scheduleSnapshot()
+  }
 
   if (isRestoringCanvas.value) return
   if (isDraft.value) {
@@ -352,7 +481,11 @@ onNodesChange((changes) => {
   }
   autoSave()
 })
-onEdgesChange(() => {
+onEdgesChange((changes) => {
+  const hasStructuralChange = changes.some((c) => c.type !== 'select')
+  if (hasStructuralChange) {
+    scheduleSnapshot()
+  }
   if (isRestoringCanvas.value) return
   if (isDraft.value) {
     isDraftDirty.value = true
@@ -374,12 +507,13 @@ onMoveEnd(() => {
 })
 // Note: onConnect is a specific event, need to wrap it or watch edges
 const onConnect = (params: Connection) => {
-   addEdges([params])
-   if (isDraft.value) {
-     isDraftDirty.value = true
-     return
-   }
-   autoSave()
+  addEdges([params])
+  scheduleSnapshot()
+  if (isDraft.value) {
+    isDraftDirty.value = true
+    return
+  }
+  autoSave()
 }
 
 // Save Version (Manual Save)
@@ -647,6 +781,15 @@ onNodeContextMenu(({ event, node }: any) => {
   if (!event || !node) return
   event.preventDefault()
 
+  // Find all selected nodes
+  const selectedNodes = nodes.value.filter(n => n.selected)
+  const isTargetSelected = node.selected || selectedNodes.some(n => n.id === node.id)
+  
+  // If we right-click a selected node and there are other selected nodes, we delete all of them
+  const nodesToDelete = isTargetSelected && selectedNodes.length > 1 
+    ? selectedNodes.map(n => n.id)
+    : [node.id]
+
   connectionContextMenu.value.visible = false
   contextMenu.value = {
     visible: true,
@@ -654,9 +797,9 @@ onNodeContextMenu(({ event, node }: any) => {
     y: (event as MouseEvent).clientY,
     items: [
       {
-        label: t('canvas.context.deleteNode'),
+        label: nodesToDelete.length > 1 ? t('canvas.context.deleteSelectedNodes') : t('canvas.context.deleteNode'),
         icon: Trash2,
-        action: () => removeNodes([node.id], true),
+        action: () => removeNodes(nodesToDelete, true),
       },
     ],
   }
@@ -666,18 +809,38 @@ onPaneContextMenu((event: any) => {
   if (!event) return
   event.preventDefault()
 
+  const selectedNodes = nodes.value.filter(n => n.selected)
+  const selectedEdges = edges.value.filter(e => e.selected)
+
+  const items: any[] = []
+
+  if (selectedNodes.length > 0 || selectedEdges.length > 0) {
+    items.push({
+      label: t('canvas.context.deleteSelection'),
+      icon: Trash2,
+      action: () => {
+        if (selectedNodes.length > 0) {
+          removeNodes(selectedNodes.map(n => n.id))
+        }
+        if (selectedEdges.length > 0) {
+          removeEdges(selectedEdges.map(e => e.id))
+        }
+      },
+    })
+  }
+
+  items.push({
+    label: t('canvas.context.addNote'),
+    icon: Pencil,
+    action: () => addNoteAtClientPoint((event as MouseEvent).clientX, (event as MouseEvent).clientY),
+  })
+
   connectionContextMenu.value.visible = false
   contextMenu.value = {
     visible: true,
     x: (event as MouseEvent).clientX,
     y: (event as MouseEvent).clientY,
-    items: [
-      {
-        label: t('canvas.context.addNote'),
-        icon: Pencil,
-        action: () => addNoteAtClientPoint((event as MouseEvent).clientX, (event as MouseEvent).clientY),
-      },
-    ],
+    items,
   }
 })
 
@@ -796,6 +959,7 @@ const onColumnDblClick = ({ event, column, tableName }: any) => {
 
 const onColumnClick = ({ event, column, tableName }: any) => {
   if (connectingState.value.active) {
+    event.stopPropagation()
     completeConnection(tableName, column.name)
   }
 }
@@ -893,6 +1057,7 @@ const saveConnectionDetails = async () => {
 }
 
 const selectConnection = (conn: any) => {
+  if (currentConnectionId.value === conn.id) return
   dbConfig.value = { ...conn }
   currentConnectionId.value = conn.id
   if (import.meta.client && projectId.value) {
@@ -1271,33 +1436,74 @@ onBeforeUnmount(() => {
         :default-viewport="{ zoom: 0.8 }"
         :min-zoom="0.2"
         :max-zoom="4"
+        :nodes-draggable="true"
+        :nodes-connectable="interactionMode === 'pointer'"
+        :elements-selectable="true"
+        :pan-on-drag="interactionMode === 'hand'"
+        :selection-on-drag="interactionMode === 'pointer'"
+        :selection-key-code="interactionMode === 'pointer' ? true : 'Shift'"
         @connect="onConnect"
       >
         <Background pattern-color="hsl(var(--border))" :gap="20" :size="1" />
         
-        <!-- Canvas Toolbar (Left Center) -->
-        <div class="absolute left-6 top-1/2 -translate-y-1/2 z-50 flex flex-col items-center gap-1 p-1 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl">
+        <!-- Canvas Toolbar (Left) -->
+        <div class="absolute left-6 top-1/2 -translate-y-1/2 z-50 flex flex-col items-center gap-3 p-1 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl">
+          <div class="flex flex-col items-center gap-2">
+            <div class="flex flex-col items-center gap-2 p-1 rounded-full bg-muted/40">
+              <Button
+                variant="ghost"
+                size="icon"
+                class="rounded-full h-9 w-9"
+                :class="{ 'bg-background text-foreground': interactionMode === 'pointer' }"
+                :title="t('canvas.pointerMode')"
+                @click="interactionMode = 'pointer'"
+              >
+                <MousePointer2 class="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="rounded-full h-9 w-9"
+                :class="{ 'bg-background text-foreground': interactionMode === 'hand' }"
+                :title="t('canvas.handMode')"
+                @click="interactionMode = 'hand'"
+              >
+                <Hand class="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div class="h-px w-6 bg-border/70 my-1"></div>
+
+            <Button @click="organizeNodes" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.organize')">
+              <LayoutGrid class="h-4 w-4" />
+            </Button>
+            <Button @click="clearCanvas" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.clear')">
+              <Trash2 class="h-4 w-4" />
+            </Button>
+            <Button @click="exportSql" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.exportSql')">
+              <FileCode class="h-4 w-4" />
+            </Button>
+          </div>
+
           <Button 
             @click="isCanvasSidebarOpen = !isCanvasSidebarOpen" 
             variant="ghost" 
             size="icon" 
-            class="rounded-full h-10 w-10 hover:bg-muted" 
+            class="rounded-full h-10 w-10 hover:bg-muted"
             :class="{ 'text-primary': isCanvasSidebarOpen }"
             :title="t('canvas.toggleSidebar')"
           >
-            <PanelLeft class="h-4 w-4" />
+            <PanelLeftClose v-if="isCanvasSidebarOpen" class="h-4 w-4" />
+            <PanelLeftOpen v-else class="h-4 w-4" />
           </Button>
+        </div>
 
-          <div class="h-px w-6 bg-border/70 my-1"></div>
-
-          <Button @click="loadCanvas" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.reload')">
-            <RotateCw class="h-4 w-4" />
+        <div class="absolute left-24 bottom-6 z-50 flex items-center gap-2 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl p-1">
+          <Button @click="undo" variant="ghost" size="icon" class="rounded-full h-9 w-9 hover:bg-muted" :title="t('canvas.undo')" :disabled="!canUndo">
+            <Undo2 class="h-4 w-4" />
           </Button>
-          <Button @click="clearCanvas" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.clear')">
-            <Trash2 class="h-4 w-4" />
-          </Button>
-          <Button @click="exportSql" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.exportSql')">
-            <FileCode class="h-4 w-4" />
+          <Button @click="redo" variant="ghost" size="icon" class="rounded-full h-9 w-9 hover:bg-muted" :title="t('canvas.redo')" :disabled="!canRedo">
+            <Redo2 class="h-4 w-4" />
           </Button>
         </div>
 
@@ -1383,6 +1589,17 @@ onBeforeUnmount(() => {
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
   border: 1px solid hsl(var(--border));
   background: hsl(var(--popover));
+}
+
+/* Selection Box Styling */
+.vue-flow__selection {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  border-radius: 4px;
+}
+
+.vue-flow__selection-pane {
+  z-index: 5;
 }
 
 /* Scrollbar override if needed, but ScrollArea handles it mostly */
