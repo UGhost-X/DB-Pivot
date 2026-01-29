@@ -21,7 +21,9 @@ import {
   Type,
   Hash,
   Calendar,
-  ToggleLeft
+  ToggleLeft,
+  Network,
+  Settings
 } from 'lucide-vue-next'
 import PgsqlSvg from '@/assets/icons/Pgsql.svg?component'
 import MysqlSvg from '@/assets/icons/Mysql.svg?component'
@@ -45,6 +47,8 @@ const emit = defineEmits<{
   (e: 'select-connection', conn: any): void
   (e: 'connection-context-menu', payload: { event: MouseEvent, conn: any }): void
   (e: 'add-table', tableName: string): void
+  (e: 'open-relationship-query'): void
+  (e: 'open-pattern-config'): void
 }>()
 
 const tableSearch = ref('')
@@ -163,6 +167,7 @@ const getAvailableTables = (tables: string[]) => {
       <!-- Content -->
       <ScrollArea class="flex-1">
         <Accordion type="multiple" class="w-full" :default-value="['connections']">
+
            <!-- Connections -->
            <AccordionItem value="connections" class="border-b-0">
             <AccordionTrigger class="px-4 py-2 hover:no-underline hover:bg-muted/50 text-xs font-bold text-muted-foreground uppercase tracking-wider">

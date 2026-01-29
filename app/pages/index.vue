@@ -9,6 +9,8 @@ import NoteNode from '@/components/NoteNode.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import CanvasSidebar from '@/components/layout/CanvasSidebar.vue'
+import RelationshipQueryPanel from '@/components/RelationshipQueryPanel.vue'
+import PatternConfigPanel, { type PatternRule, type DetectionResult } from '@/components/PatternConfigPanel.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -17,7 +19,8 @@ import {
   Plus, CloudUpload, Maximize, Minus, 
   Trash2, Link, EyeOff, FileCode,
   Loader2, Pencil, Activity,
-  History, LayoutGrid, Undo2, Redo2, Hand, MousePointer2, PanelLeftOpen, PanelLeftClose
+  History, LayoutGrid, Undo2, Redo2, Hand, MousePointer2, PanelLeftOpen, PanelLeftClose,
+  Paintbrush, Settings
 } from 'lucide-vue-next'
 import { generateSQL } from '@/utils/sqlGenerator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -51,11 +54,381 @@ const isAppSidebarCollapsed = ref(false)
 const isCanvasSidebarOpen = ref(true)
 const interactionMode = ref<'pointer' | 'hand'>('pointer')
 
+// Relationship Features
+const isRelationshipQueryOpen = ref(false)
+const isPatternConfigOpen = ref(false)
+
 const historyStack = ref<any[]>([])
 const redoStack = ref<any[]>([])
 const isApplyingHistory = ref(false)
 const canUndo = computed(() => historyStack.value.length > 1)
 const canRedo = computed(() => redoStack.value.length > 0)
+
+// Pattern Configuration
+const patternRules = ref<PatternRule[]>([
+  {
+    id: 1,
+    name: '用户ID关联 (user_id -> users)',
+    sourcePattern: '^(.*)_id$',
+    targetPattern: '${1}s', // Template replacement
+    relationshipType: 'ONE_TO_MANY',
+    priority: 10,
+    isActive: true
+  }
+])
+const detectionStats = ref<DetectionResult | null>(null)
+
+const detectedPatternEdges = computed(() => {
+  return edges.value
+    .filter(e => e.data?.createdBy === 'pattern')
+    .map(e => ({
+      id: e.id,
+      sourceNodeLabel: e.data?.sourceNodeLabel || 'Unknown',
+      sourceHandleLabel: e.data?.sourceHandleLabel || 'Unknown',
+      targetNodeLabel: e.data?.targetNodeLabel || 'Unknown',
+      targetHandleLabel: e.data?.targetHandleLabel || 'Unknown',
+      ruleName: e.data?.ruleName
+    }))
+})
+
+const handleSelectDetectedEdge = (edgeId: string) => {
+  nodes.value.forEach(n => n.selected = false)
+  edges.value.forEach(e => {
+    e.selected = e.id === edgeId
+    // Force style update if needed
+    if (e.selected) {
+      e.animated = true
+      e.style = { ...e.style, strokeWidth: 3, stroke: 'hsl(var(--primary))' }
+    } else {
+      e.animated = false
+      e.style = { ...e.style, strokeWidth: 2, stroke: undefined }
+    }
+  })
+  
+  const edge = edges.value.find(e => e.id === edgeId)
+  if (edge) {
+    const sourceNode = nodes.value.find(n => n.id === edge.source)
+    const targetNode = nodes.value.find(n => n.id === edge.target)
+    if (sourceNode && targetNode) {
+       fitView({ nodes: [sourceNode, targetNode], padding: 0.5, duration: 800 })
+    }
+  }
+}
+
+const handleDeleteDetectedEdge = (edgeId: string) => {
+  removeEdges([edgeId])
+  toast.success('已删除关系')
+}
+
+const handleDeleteDetectedEdges = (edgeIds: string[]) => {
+  removeEdges(edgeIds)
+  toast.success(`已删除 ${edgeIds.length} 个关系`)
+}
+
+const handleAddRule = (rule: PatternRule) => {
+  const newId = Math.max(...patternRules.value.map(r => r.id || 0), 0) + 1
+  patternRules.value.push({ ...rule, id: newId })
+}
+
+const handleEditRule = (updatedRule: PatternRule) => {
+  const index = patternRules.value.findIndex(r => r.id === updatedRule.id)
+  if (index !== -1) {
+    patternRules.value[index] = updatedRule
+  }
+}
+
+const handleQueryRelationship = (edgeId: string) => {
+  const edge = edges.value.find(e => e.id === edgeId)
+  if (edge) {
+    const sourceNode = nodes.value.find(n => n.id === edge.source)
+    const targetNode = nodes.value.find(n => n.id === edge.target)
+    
+    if (sourceNode && targetNode) {
+      // Generate SQL query for this relationship
+      const sql = generateSQL({
+        sourceTable: sourceNode.data.name,
+        sourceColumn: edge.sourceHandle,
+        targetTable: targetNode.data.name,
+        targetColumn: edge.targetHandle,
+        relationshipType: edge.data?.relationshipType || 'ONE_TO_MANY'
+      })
+      
+      // Show SQL in a dialog or notification
+      toast.success('SQL 查询已生成', {
+        description: sql,
+        duration: 5000
+      })
+    }
+  }
+}
+
+const updateColumnHighlights = () => {
+  // Reset all highlights first
+  nodes.value.forEach(node => {
+    if (node.type === 'table' && node.data.columns) {
+      node.data.columns.forEach((col: any) => {
+        col.highlightType = null
+      })
+    }
+  })
+
+  const canvasTables = nodes.value.filter(n => n.type === 'table')
+  const canvasTableNames = new Set(canvasTables.map(n => n.data.label))
+  
+  // Create a map for quick lookup
+  const tableNodeMap = new Map<string, any>()
+  canvasTables.forEach(node => {
+    tableNodeMap.set(node.data.label, node)
+  })
+
+  // Iterate all tables to find source matches
+  for (const [tableName, node] of tableNodeMap.entries()) {
+    const columns = node.data.columns || []
+    
+    columns.forEach((col: any) => {
+      for (const rule of patternRules.value) {
+        if (!rule.isActive) continue
+
+        // Check Table Pattern
+        if (rule.tablePattern) {
+          try {
+            const tableRegex = new RegExp(rule.tablePattern, 'i')
+            if (!tableRegex.test(tableName)) continue
+          } catch (e) {
+            continue
+          }
+        }
+
+        // Check Source Pattern
+        try {
+          const sourceRegex = new RegExp(rule.sourcePattern, 'i')
+          const match = col.name.match(sourceRegex)
+
+          if (match) {
+            // Highlight Source Column
+            col.highlightType = 'source'
+
+            // Find Target Table(s)
+            let targetTablePattern = rule.targetPattern
+            for (let i = 1; i < match.length; i++) {
+               targetTablePattern = targetTablePattern.replace(new RegExp(`\\$\\{${i}\\}`, 'g'), match[i])
+            }
+
+            let potentialTargets: string[] = []
+            
+            if (targetTablePattern.includes('${')) {
+               potentialTargets = [targetTablePattern]
+            } else if (rule.targetPattern.includes('${')) {
+               potentialTargets = [targetTablePattern]
+            } else {
+               try {
+                  const targetRegex = new RegExp(targetTablePattern, 'i')
+                  potentialTargets = Array.from(canvasTableNames).filter(t => targetRegex.test(t))
+               } catch (e) {
+                  // console.error('Invalid target regex', targetTablePattern)
+               }
+            }
+
+            // Highlight Target Columns
+            for (const targetTable of potentialTargets) {
+              if (targetTable === tableName) continue
+              const targetNode = tableNodeMap.get(targetTable)
+              if (!targetNode) continue
+
+              const targetColumns = targetNode.data.columns || []
+              let targetCol
+
+              if (rule.targetColumnPattern) {
+                 // If target column pattern is specified
+                 let targetColPattern = rule.targetColumnPattern
+                 for (let i = 1; i < match.length; i++) {
+                    targetColPattern = targetColPattern.replace(new RegExp(`\\$\\{${i}\\}`, 'g'), match[i])
+                 }
+                 try {
+                    const targetColRegex = new RegExp(targetColPattern, 'i')
+                    targetCol = targetColumns.find((c: any) => targetColRegex.test(c.name))
+                 } catch (e) {
+                    // Invalid regex, fallback? Or ignore?
+                 }
+              } else {
+                 // Fallback to PK/id
+                 targetCol = targetColumns.find((c: any) => c.isPrimaryKey) || targetColumns.find((c: any) => c.name === 'id')
+              }
+              
+              if (targetCol) {
+                targetCol.highlightType = 'target'
+              }
+            }
+          }
+        } catch (e) {
+          // Regex error
+        }
+      }
+    })
+  }
+}
+
+const handleHighlightColumns = () => {
+  updateColumnHighlights()
+  toast.info('列已标记', { description: '源列显示为绿色，目标列显示为红色' })
+}
+
+const handleCancelHighlight = () => {
+  nodes.value.forEach(node => {
+    if (node.type === 'table' && node.data.columns) {
+      node.data.columns.forEach((col: any) => {
+        col.highlightType = null
+      })
+    }
+  })
+  toast.info('标记已取消')
+}
+
+const handleConfirmConnection = () => {
+  handleAutoDetect()
+}
+
+const handleAutoDetect = () => {
+  let detectedCount = 0
+  let byPattern = 0
+  
+  const existingEdges = new Set(edges.value.map(e => `${e.source}|${e.sourceHandle}|${e.target}|${e.targetHandle}`))
+  const newEdges: Edge[] = []
+  
+  const canvasTables = nodes.value.filter(n => n.type === 'table')
+  const canvasTableNames = new Set(canvasTables.map(n => n.data.label))
+  
+  // Create a map for quick lookup of table -> columns
+  const tableMap = new Map<string, any[]>()
+  canvasTables.forEach(node => {
+    tableMap.set(node.data.label, node.data.columns)
+  })
+  
+  // Iterate all tables on canvas
+  for (const [tableName, columns] of tableMap.entries()) {
+    columns.forEach(col => {
+      // 1. Check active rules
+      for (const rule of patternRules.value) {
+        if (!rule.isActive) continue
+        
+        // Check Table Pattern if exists
+        if (rule.tablePattern) {
+          try {
+            const tableRegex = new RegExp(rule.tablePattern, 'i')
+            if (!tableRegex.test(tableName)) continue
+          } catch (e) {
+            continue
+          }
+        }
+
+        const sourceRegex = new RegExp(rule.sourcePattern, 'i')
+        const match = col.name.match(sourceRegex)
+        
+        if (match) {
+          // Construct target table name pattern
+          let targetTablePattern = rule.targetPattern
+          // Replace ${1}, ${2} etc with captured groups
+          for (let i = 1; i < match.length; i++) {
+             targetTablePattern = targetTablePattern.replace(new RegExp(`\\$\\{${i}\\}`, 'g'), match[i])
+          }
+          
+          let potentialTargets: string[] = []
+          
+          if (targetTablePattern.includes('${')) {
+             // If it still contains ${}, it means we failed to replace some groups or it's just a string with ${
+             // Treat as literal match attempt or skip?
+             // Let's assume user might want literal match if they didn't use capture groups correctly
+             potentialTargets = [targetTablePattern]
+          } else if (rule.targetPattern.includes('${')) {
+             // It was a template and we replaced it
+             potentialTargets = [targetTablePattern]
+          } else {
+             // It's a regex (no ${} in original pattern)
+             try {
+                const targetRegex = new RegExp(targetTablePattern, 'i')
+                potentialTargets = Array.from(canvasTableNames).filter(t => targetRegex.test(t))
+             } catch (e) {
+                console.error('Invalid target regex', targetTablePattern)
+             }
+          }
+          
+          for (const targetTable of potentialTargets) {
+            if (targetTable === tableName) continue 
+            if (!tableMap.has(targetTable)) continue
+            
+            // Found target table. Find target column.
+            const targetColumns = tableMap.get(targetTable) || []
+            let targetCol
+
+            if (rule.targetColumnPattern) {
+                let targetColPattern = rule.targetColumnPattern
+                for (let i = 1; i < match.length; i++) {
+                  targetColPattern = targetColPattern.replace(new RegExp(`\\$\\{${i}\\}`, 'g'), match[i])
+                }
+                try {
+                  const targetColRegex = new RegExp(targetColPattern, 'i')
+                  targetCol = targetColumns.find(c => targetColRegex.test(c.name))
+                } catch (e) {
+                  // Ignore regex error
+                }
+            } else {
+                targetCol = targetColumns.find(c => c.isPrimaryKey) || targetColumns.find(c => c.name === 'id')
+            }
+            
+            if (targetCol) {
+               const sourceId = `table-${tableName}`
+               const sourceHandle = `${col.name}-source`
+               const targetId = `table-${targetTable}`
+               const targetHandle = `${targetCol.name}-target`
+               
+               const edgeKey = `${sourceId}|${sourceHandle}|${targetId}|${targetHandle}`
+               // Check reverse edge too to avoid duplicates? Usually edges are directional.
+               
+               if (!existingEdges.has(edgeKey)) {
+                 newEdges.push({
+                   id: `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                   source: sourceId,
+                   sourceHandle,
+                   target: targetId,
+                   targetHandle,
+                   type: 'default',
+                   animated: false,
+                   style: { strokeWidth: 2 },
+                   class: 'edge-muted',
+                   data: {
+                     createdBy: 'pattern',
+                     ruleName: rule.name,
+                     sourceNodeLabel: tableName,
+                     targetNodeLabel: targetTable,
+                     sourceHandleLabel: col.name,
+                     targetHandleLabel: targetCol.name
+                   }
+                 })
+                 existingEdges.add(edgeKey)
+                 detectedCount++
+                 byPattern++
+               }
+            }
+          }
+        }
+      }
+    })
+  }
+  
+  if (newEdges.length > 0) {
+    addEdges(newEdges)
+    toast.success(t('toast.success'), { description: `成功检测并添加了 ${newEdges.length} 个关系。` })
+  } else {
+    toast.info(t('toast.info'), { description: '未检测到新的关系。' })
+  }
+  
+  detectionStats.value = {
+    totalDetected: detectedCount,
+    byForeignKey: 0,
+    byPattern,
+    highConfidence: detectedCount
+  }
+}
 
 // Version Control
 const isHistoryDialogOpen = ref(false)
@@ -74,6 +447,9 @@ onPaneReady(() => {
   if (pendingCanvasData.value) {
     isRestoringCanvas.value = true
     fromObject(pendingCanvasData.value)
+    if (pendingCanvasData.value.patternRules) {
+      patternRules.value = pendingCanvasData.value.patternRules
+    }
     hydrateTableNodes()
     applyEdgeDefaults()
     isRestoringCanvas.value = false
@@ -184,6 +560,10 @@ const editingConnection = ref<any>(null)
 const hoveredForeignKey = ref<{ tableName: string; columnName: string } | null>(null)
 let isUpdatingEdgeStyles = false
 
+const isHeaderColorDialogOpen = ref(false)
+const headerColorTargets = ref<string[]>([])
+const headerColorValue = ref('#22c55e')
+
 const normalizeEdge = (edge: Edge) => ({
   ...edge,
   type: edge.type || 'default',
@@ -213,18 +593,20 @@ const updateEdgeHighlights = () => {
       // Only highlight on hover, not on selection
       const isSelectedMatch = false 
       const nextClass = isHoverMatch || isSelectedMatch ? 'edge-active' : 'edge-muted'
-      const currentStrokeWidth =
-        typeof edge.style === 'object' && edge.style && 'strokeWidth' in edge.style
-          ? (edge.style as any).strokeWidth
-          : undefined
-      if (edge.class === nextClass && edge.type && currentStrokeWidth === 2) return edge
+      
+      const currentStyle = (edge.style || {}) as any
+      const { stroke, ...cleanStyle } = currentStyle
+      const currentStrokeWidth = currentStyle.strokeWidth
+      const hasStroke = 'stroke' in currentStyle
+
+      if (edge.class === nextClass && edge.type && currentStrokeWidth === 2 && !hasStroke) return edge
       return {
         ...edge,
         class: nextClass,
         type: edge.type || 'default',
         animated: false,
         style: {
-          ...(edge.style || {}),
+          ...cleanStyle,
           strokeWidth: 2,
         },
       }
@@ -251,6 +633,131 @@ const hydrateTableNodes = () => {
       }
     })
   )
+}
+
+const openHeaderColorDialogForNodes = (nodeIds: string[]) => {
+  if (!nodeIds.length) return
+  headerColorTargets.value = nodeIds
+  const firstNode = nodes.value.find((n) => n.id === nodeIds[0])
+  if (firstNode && firstNode.data) {
+    if (firstNode.data.color) {
+      headerColorValue.value = firstNode.data.color
+    } else if (firstNode.data.isView) {
+      headerColorValue.value = '#a855f7'
+    } else {
+      headerColorValue.value = '#22c55e'
+    }
+  } else {
+    headerColorValue.value = '#22c55e'
+  }
+  isHeaderColorDialogOpen.value = true
+}
+
+const applyHeaderColor = () => {
+  const ids = new Set(headerColorTargets.value)
+  setNodes((current) =>
+    current.map((node) => {
+      if (!ids.has(node.id)) return node
+      return {
+        ...node,
+        data: {
+          ...(node.data || {}),
+          color: headerColorValue.value,
+        },
+      }
+    })
+  )
+  isHeaderColorDialogOpen.value = false
+}
+
+const groupSelectedNodes = () => {
+  const selected = nodes.value.filter((n) => n.selected && n.type === 'table')
+  if (selected.length < 2) return
+  const groupId = `group-${Date.now()}`
+  const selectedIds = new Set(selected.map((n) => n.id))
+  setNodes((current) =>
+    current.map((node) => {
+      if (!selectedIds.has(node.id)) return node
+      return {
+        ...node,
+        data: {
+          ...(node.data || {}),
+          groupId,
+        },
+      }
+    })
+  )
+}
+
+const ungroupSelectedNodes = () => {
+  const selectedIds = new Set(nodes.value.filter((n) => n.selected && n.type === 'table').map((n) => n.id))
+  if (!selectedIds.size) return
+  setNodes((current) =>
+    current.map((node) => {
+      if (!selectedIds.has(node.id) || !node.data || !('groupId' in node.data)) return node
+      const { groupId, ...rest } = node.data as any
+      return {
+        ...node,
+        data: rest,
+      }
+    })
+  )
+}
+
+const alignSelectedNodes = (direction: 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom') => {
+  const selected = nodes.value.filter((n) => n.selected && n.type === 'table')
+  if (selected.length < 2) return
+
+  const bounds = selected.map((n) => {
+    const width = n.dimensions?.width || 250
+    const height = n.dimensions?.height || 300
+    return {
+      id: n.id,
+      x: n.position.x,
+      y: n.position.y,
+      width,
+      height,
+    }
+  })
+
+  const minX = Math.min(...bounds.map((b) => b.x))
+  const maxX = Math.max(...bounds.map((b) => b.x + b.width))
+  const minY = Math.min(...bounds.map((b) => b.y))
+  const maxY = Math.max(...bounds.map((b) => b.y + b.height))
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+
+  setNodes((current) =>
+    current.map((node) => {
+      const b = bounds.find((bb) => bb.id === node.id)
+      if (!b) return node
+      let x = b.x
+      let y = b.y
+
+      if (direction === 'left') {
+        x = minX
+      } else if (direction === 'right') {
+        x = maxX - b.width
+      } else if (direction === 'centerX') {
+        x = centerX - b.width / 2
+      } else if (direction === 'top') {
+        y = minY
+      } else if (direction === 'bottom') {
+        y = maxY - b.height
+      } else if (direction === 'centerY') {
+        y = centerY - b.height / 2
+      }
+
+      return {
+        ...node,
+        position: {
+          x,
+          y,
+        },
+      }
+    })
+  )
+  captureSnapshot()
 }
 
 // Watch DB Type to set defaults
@@ -329,6 +836,9 @@ const loadProject = async () => {
         if (isFlowReady.value) {
           isRestoringCanvas.value = true
           fromObject(canvasRes.data.data)
+          if (canvasRes.data.data.patternRules) {
+            patternRules.value = canvasRes.data.data.patternRules
+          }
           hydrateTableNodes()
           applyEdgeDefaults()
           isRestoringCanvas.value = false
@@ -443,7 +953,10 @@ const autoSave = useDebounceFn(async () => {
   
   isAutoSaving.value = true
   try {
-    const flowData = toObject()
+    const flowData = {
+      ...toObject(),
+      patternRules: patternRules.value
+    }
     const res: any = await $fetch('/api/canvas', {
       method: 'PUT',
       body: {
@@ -505,6 +1018,16 @@ onMoveEnd(() => {
   }
   autoSave()
 })
+
+watch(patternRules, () => {
+  if (isRestoringCanvas.value) return
+  if (isDraft.value) {
+    isDraftDirty.value = true
+    return
+  }
+  autoSave()
+}, { deep: true })
+
 // Note: onConnect is a specific event, need to wrap it or watch edges
 const onConnect = (params: Connection) => {
   addEdges([params])
@@ -524,7 +1047,10 @@ const saveCanvas = async () => {
   }
   
   try {
-    const flowData = toObject()
+    const flowData = {
+      ...toObject(),
+      patternRules: patternRules.value
+    }
     
     // First update current state (Temp version)
     await $fetch('/api/canvas', {
@@ -781,27 +1307,71 @@ onNodeContextMenu(({ event, node }: any) => {
   if (!event || !node) return
   event.preventDefault()
 
-  // Find all selected nodes
   const selectedNodes = nodes.value.filter(n => n.selected)
   const isTargetSelected = node.selected || selectedNodes.some(n => n.id === node.id)
   
-  // If we right-click a selected node and there are other selected nodes, we delete all of them
   const nodesToDelete = isTargetSelected && selectedNodes.length > 1 
     ? selectedNodes.map(n => n.id)
     : [node.id]
 
+  const scopedNodes = isTargetSelected && selectedNodes.length > 0 ? selectedNodes : [node]
+  const tableNodeIds = scopedNodes.filter((n: any) => n.type === 'table').map((n: any) => n.id)
+
   connectionContextMenu.value.visible = false
+  const items: any[] = []
+
+  if (tableNodeIds.length > 0) {
+    if (tableNodeIds.length > 1) {
+      items.push({
+        label: t('canvas.context.group'),
+        icon: LayoutGrid,
+        action: () => groupSelectedNodes(),
+      })
+      items.push({
+        label: t('canvas.context.ungroup'),
+        icon: LayoutGrid,
+        action: () => ungroupSelectedNodes(),
+      })
+      items.push({
+        label: t('canvas.context.alignLeft'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('left'),
+      })
+      items.push({
+        label: t('canvas.context.alignCenterX'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('centerX'),
+      })
+      items.push({
+        label: t('canvas.context.alignTop'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('top'),
+      })
+      items.push({
+        label: t('canvas.context.alignCenterY'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('centerY'),
+      })
+    }
+
+    items.push({
+      label: tableNodeIds.length > 1 ? t('canvas.context.nodeStyleSelected') : t('canvas.context.nodeStyle'),
+      icon: Paintbrush,
+      action: () => openHeaderColorDialogForNodes(tableNodeIds),
+    })
+  }
+
+  items.push({
+    label: nodesToDelete.length > 1 ? t('canvas.context.deleteSelectedNodes') : t('canvas.context.deleteNode'),
+    icon: Trash2,
+    action: () => removeNodes(nodesToDelete, true),
+  })
+
   contextMenu.value = {
     visible: true,
     x: (event as MouseEvent).clientX,
     y: (event as MouseEvent).clientY,
-    items: [
-      {
-        label: nodesToDelete.length > 1 ? t('canvas.context.deleteSelectedNodes') : t('canvas.context.deleteNode'),
-        icon: Trash2,
-        action: () => removeNodes(nodesToDelete, true),
-      },
-    ],
+    items,
   }
 })
 
@@ -826,6 +1396,48 @@ onPaneContextMenu((event: any) => {
           removeEdges(selectedEdges.map(e => e.id))
         }
       },
+    })
+  }
+
+  const selectedTableNodes = selectedNodes.filter(n => n.type === 'table')
+  if (selectedTableNodes.length > 0) {
+    const ids = selectedTableNodes.map(n => n.id)
+    if (ids.length > 1) {
+      items.push({
+        label: t('canvas.context.group'),
+        icon: LayoutGrid,
+        action: () => groupSelectedNodes(),
+      })
+      items.push({
+        label: t('canvas.context.ungroup'),
+        icon: LayoutGrid,
+        action: () => ungroupSelectedNodes(),
+      })
+      items.push({
+        label: t('canvas.context.alignLeft'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('left'),
+      })
+      items.push({
+        label: t('canvas.context.alignCenterX'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('centerX'),
+      })
+      items.push({
+        label: t('canvas.context.alignTop'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('top'),
+      })
+      items.push({
+        label: t('canvas.context.alignCenterY'),
+        icon: LayoutGrid,
+        action: () => alignSelectedNodes('centerY'),
+      })
+    }
+    items.push({
+      label: ids.length > 1 ? t('canvas.context.nodeStyleSelected') : t('canvas.context.nodeStyle'),
+      icon: Paintbrush,
+      action: () => openHeaderColorDialogForNodes(ids),
     })
   }
 
@@ -912,7 +1524,7 @@ const completeConnection = (targetTable: string, targetColumn: string) => {
     style: { stroke: '#b1b1b7', strokeWidth: 2 },
   }])
 
-  toast.success(t('toast.connected'))
+  // toast.success(t('toast.connected'))
   cancelConnection()
 }
 
@@ -1075,7 +1687,7 @@ const connectDB = async () => {
     })
     tables.value = res.data
     metadataTree.value = res.tree || null
-    toast.success(t('toast.databaseConnected'))
+    // toast.success(t('toast.databaseConnected'))
     
     // Auto-save connection if it's new
     if (!currentConnectionId.value) {
@@ -1202,21 +1814,23 @@ onBeforeUnmount(() => {
 
     <!-- Column 2: Canvas Sidebar (Connections & Tables) -->
     <CanvasSidebar
-      :isOpen="isCanvasSidebarOpen"
-      :savedConnections="savedConnections"
-      :connectionStatuses="connectionStatuses"
-      :currentConnectionId="currentConnectionId"
-      :availableTables="availableTables"
-      :metadataTree="metadataTree"
-      :isTableOnCanvas="isTableOnCanvas"
-      :addedTables="addedTableNames"
-      :tablesData="tables"
-      @close="isCanvasSidebarOpen = false"
-      @add-connection="openAddConnectionDialog"
-      @select-connection="selectConnection"
-      @connection-context-menu="onConnectionContextMenu"
-      @add-table="addTableToCanvas"
-    />
+        :isOpen="isCanvasSidebarOpen"
+        :savedConnections="savedConnections"
+        :connectionStatuses="connectionStatuses"
+        :currentConnectionId="currentConnectionId"
+        :availableTables="availableTables"
+        :metadataTree="metadataTree"
+        :isTableOnCanvas="isTableOnCanvas"
+        :addedTables="addedTableNames"
+        :tablesData="tables"
+        @close="isCanvasSidebarOpen = false"
+        @add-connection="openAddConnectionDialog"
+        @select-connection="selectConnection"
+        @connection-context-menu="onConnectionContextMenu"
+        @add-table="addTableToCanvas"
+        @open-relationship-query="isRelationshipQueryOpen = true"
+        @open-pattern-config="isPatternConfigOpen = true"
+      />
 
     <!-- Column 3: Main Canvas Area -->
     <div class="flex-1 h-full relative overflow-hidden bg-background">
@@ -1422,6 +2036,34 @@ onBeforeUnmount(() => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog :open="isHeaderColorDialogOpen" @update:open="isHeaderColorDialogOpen = $event">
+        <DialogContent class="sm:max-w-[360px]">
+          <DialogHeader>
+            <DialogTitle>{{ t('canvas.headerColorDialog.title') }}</DialogTitle>
+            <DialogDescription>
+              {{ t('canvas.headerColorDialog.description') }}
+            </DialogDescription>
+          </DialogHeader>
+          <div class="grid gap-4 py-4">
+            <div class="grid grid-cols-4 items-center gap-4">
+              <Label class="text-right">{{ t('canvas.headerColorDialog.field.color') }}</Label>
+              <div class="col-span-3 flex items-center gap-2">
+                <input
+                  v-model="headerColorValue"
+                  type="color"
+                  class="h-9 w-9 rounded-md border border-border bg-transparent cursor-pointer"
+                />
+                <Input v-model="headerColorValue" class="flex-1" />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" @click="isHeaderColorDialogOpen = false">{{ t('common.close') }}</Button>
+            <Button @click="applyHeaderColor">{{ t('common.saveChanges') }}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
       <ContextMenu 
         :visible="connectionContextMenu.visible"
@@ -1477,9 +2119,6 @@ onBeforeUnmount(() => {
             <Button @click="organizeNodes" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.organize')">
               <LayoutGrid class="h-4 w-4" />
             </Button>
-            <Button @click="clearCanvas" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.clear')">
-              <Trash2 class="h-4 w-4" />
-            </Button>
             <Button @click="exportSql" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.exportSql')">
               <FileCode class="h-4 w-4" />
             </Button>
@@ -1498,12 +2137,23 @@ onBeforeUnmount(() => {
           </Button>
         </div>
 
-        <div class="absolute left-24 bottom-6 z-50 flex items-center gap-2 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl p-1">
+        <div class="absolute left-10 bottom-6 z-50 flex items-center gap-2 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl p-1">
           <Button @click="undo" variant="ghost" size="icon" class="rounded-full h-9 w-9 hover:bg-muted" :title="t('canvas.undo')" :disabled="!canUndo">
             <Undo2 class="h-4 w-4" />
           </Button>
           <Button @click="redo" variant="ghost" size="icon" class="rounded-full h-9 w-9 hover:bg-muted" :title="t('canvas.redo')" :disabled="!canRedo">
             <Redo2 class="h-4 w-4" />
+          </Button>
+          <div class="w-px h-4 bg-border mx-1"></div>
+          <Button 
+            @click="isPatternConfigOpen = !isPatternConfigOpen" 
+            variant="ghost" 
+            size="icon"
+            class="rounded-full h-9 w-9 hover:bg-muted"
+            :class="{ 'text-primary': isPatternConfigOpen }"
+            title="关系管理"
+          >
+            <Settings class="h-4 w-4" />
           </Button>
         </div>
 
@@ -1520,7 +2170,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Zoom Controls (Bottom Right) -->
-        <div class="absolute bottom-6 right-6 z-50">
+        <div class="absolute bottom-6 right-6 z-50 flex items-center gap-2">
           <div class="flex items-center shadow-lg rounded-md overflow-hidden border border-border bg-background/90 backdrop-blur">
             <Button 
               @click="fitView" 
@@ -1555,11 +2205,49 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </VueFlow>
+
+      <!-- Relationship Query Panel -->
+      <RelationshipQueryPanel 
+        v-if="isRelationshipQueryOpen"
+        :tablesData="tables"
+        @close="isRelationshipQueryOpen = false"
+      />
     </div>
+
+    <!-- Right Sidebar (Pattern Configuration) -->
+    <Transition name="slide-right">
+      <div v-if="isPatternConfigOpen" class="absolute top-0 right-0 h-full z-40 shadow-2xl">
+        <PatternConfigPanel 
+          class="h-full border-l border-border bg-background"
+          :rules="patternRules"
+          :detection-result="detectionStats"
+          :detected-edges="detectedPatternEdges"
+          @add-rule="handleAddRule"
+          @edit-rule="handleEditRule"
+          @mark-columns="handleHighlightColumns"
+          @cancel-highlight="handleCancelHighlight"
+          @confirm-connection="handleConfirmConnection"
+          @close="isPatternConfigOpen = false"
+          @select-edge="handleSelectDetectedEdge"
+          @delete-edge="handleDeleteDetectedEdge"
+          @delete-edges="handleDeleteDetectedEdges"
+          @query-edge="handleQueryRelationship"
+        />
+      </div>
+    </Transition>
   </div>
 </template>
 
 <style>
+.slide-right-enter-active,
+.slide-right-leave-active {
+  transition: transform 0.3s ease;
+}
+
+.slide-right-enter-from,
+.slide-right-leave-to {
+  transform: translateX(100%);
+}
 /* Vue Flow overrides for cleaner look */
 .vue-flow__node-table {
   padding: 0 !important;

@@ -4,7 +4,7 @@
       <div class="flex-1 overflow-hidden relative">
         <NuxtPage />
       </div>
-      <Toaster />
+      <Toaster position="top-center" />
     </div>
   </TooltipProvider>
 </template>

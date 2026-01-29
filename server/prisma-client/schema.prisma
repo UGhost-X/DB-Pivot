@@ -51,3 +51,141 @@ model Canvas {
   ownerId Int?
   owner   User? @relation(fields: [ownerId], references: [id])
 }
+
+model TableRelationship {
+  id          Int       @id @default(autoincrement())
+  name        String?
+  description String?
+  
+  // Relationship details
+  sourceTable      String
+  sourceColumn     String
+  targetTable      String
+  targetColumn     String
+  relationshipType TableRelationshipType
+  
+  // Detection method
+  detectionMethod  DetectionMethod
+  confidence       Float?         @default(1.0)
+  
+  // Foreign key constraints (if available)
+  constraintName   String?
+  
+  // Connection reference
+  connectionId     Int
+  connection       Connection @relation(fields: [connectionId], references: [id])
+  
+  // Metadata
+  isActive      Boolean   @default(true)
+  isCustom      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relationships to pattern rules and queries
+  patternRuleId Int?
+  patternRule   PatternRule? @relation(fields: [patternRuleId], references: [id])
+  
+  ownerId Int?
+  owner   User? @relation(fields: [ownerId], references: [id])
+  
+  @@index([connectionId, sourceTable, targetTable])
+  @@unique([connectionId, sourceTable, sourceColumn, targetTable, targetColumn])
+}
+
+model PatternRule {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  
+  // Pattern matching rules
+  sourcePattern      String
+  targetPattern      String
+  relationshipType   TableRelationshipType
+  priority          Int           @default(0)
+  
+  // Validation rules
+  isEnabled         Boolean       @default(true)
+  minConfidence     Float?        @default(0.7)
+  
+  // Connection scope (null means global)
+  connectionId      Int?
+  connection        Connection? @relation(fields: [connectionId], references: [id])
+  
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  
+  // Relationships
+  tableRelationships TableRelationship[]
+  
+  ownerId Int?
+  owner   User? @relation(fields: [ownerId], references: [id])
+  
+  @@index([connectionId, priority])
+}
+
+model DeepQuery {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  
+  // Query configuration
+  startTable      String
+  startCondition Json?       // JSON object for WHERE conditions
+  maxDepth        Int         @default(5)
+  includeFields   Json?       // JSON array of fields to include
+  excludeFields  Json?       // JSON array of fields to exclude
+  
+  // Connection reference
+  connectionId   Int
+  connection     Connection @relation(fields: [connectionId], references: [id])
+  
+  // Performance settings
+  useCache       Boolean     @default(true)
+  cacheDuration  Int?        @default(300) // seconds
+  
+  // Metadata
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  
+  // Query results (cached)
+  lastResult     Json?
+  lastExecutedAt DateTime?
+  executionTime  Int?        // milliseconds
+  
+  ownerId Int?
+  owner   User? @relation(fields: [ownerId], references: [id])
+  
+  @@index([connectionId, startTable])
+}
+
+model QueryCache {
+  id          Int       @id @default(autoincrement())
+  queryHash   String    @unique
+  queryData   Json
+  result      Json
+  
+  // Connection reference
+  connectionId Int
+  connection   Connection @relation(fields: [connectionId], references: [id])
+  
+  expiresAt   DateTime
+  createdAt   DateTime    @default(now())
+  
+  @@index([connectionId, expiresAt])
+}
+
+enum TableRelationshipType {
+  ONE_TO_ONE
+  ONE_TO_MANY
+  MANY_TO_ONE
+  MANY_TO_MANY
+}
+
+enum DetectionMethod {
+  FOREIGN_KEY
+  NAMING_CONVENTION
+  PATTERN_MATCHING
+  MANUAL
+  INFERRED
+}

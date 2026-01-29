@@ -10,7 +10,15 @@ import { useI18n } from '@/composables/useI18n'
 const props = defineProps<{
   data: {
     label: string
-    columns: Array<{ name: string; type: string; isPrimaryKey?: boolean; isForeignKey?: boolean; nullable?: boolean; isHidden?: boolean }>
+    columns: Array<{ 
+      name: string; 
+      type: string; 
+      isPrimaryKey?: boolean; 
+      isForeignKey?: boolean; 
+      nullable?: boolean; 
+      isHidden?: boolean;
+      highlightType?: 'source' | 'target' | null 
+    }>
     isView?: boolean
     color?: string
     isCollapsed?: boolean
@@ -28,7 +36,7 @@ const { t } = useI18n()
 const headerColor = computed(() => props.data.color || (props.data.isView ? '#a855f7' : '#22c55e'))
 
 const headerStyle = computed(() => ({
-  background: `radial-gradient(circle at 50% -20%, ${headerColor.value}30, transparent 70%)`
+  backgroundColor: `${headerColor.value}30`
 }))
 
 const visibleColumns = computed(() => props.data.columns.filter(c => !c.isHidden))
@@ -110,7 +118,12 @@ const getTypeIcon = (type: string) => {
       <div 
         v-for="col in visibleColumns" 
         :key="col.name" 
-        class="h-7 px-3 flex items-center justify-between hover:bg-muted/40 group transition-colors relative cursor-pointer"
+        class="h-7 px-3 flex items-center justify-between group transition-colors relative cursor-pointer"
+        :class="{
+          'hover:bg-muted/40': !col.highlightType,
+          'bg-green-100/50 dark:bg-green-900/20 hover:bg-green-100/70 dark:hover:bg-green-900/30': col.highlightType === 'source',
+          'bg-red-100/50 dark:bg-red-900/20 hover:bg-red-100/70 dark:hover:bg-red-900/30': col.highlightType === 'target'
+        }"
         @contextmenu="handleContextMenu($event, col)"
         @dblclick="handleDblClick($event, col)"
         @click="handleClick($event, col)"

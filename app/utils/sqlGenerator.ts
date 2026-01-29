@@ -1,12 +1,23 @@
 import type { Node, Edge } from '@vue-flow/core'
 
-export const generateSQL = (nodes: Node[], edges: Edge[], dbType: 'pg' | 'mysql2' = 'pg'): string => {
+export const generateSQL = (arg1: Node[] | any, edges: Edge[] = [], dbType: 'pg' | 'mysql2' = 'pg'): string => {
   let sql = ''
   
   // Helper to escape identifiers
   const quote = (str: string) => {
     return dbType === 'pg' ? `"${str}"` : `\`${str}\``
   }
+
+  if (!Array.isArray(arg1)) {
+    // Single relationship query generation
+    const { sourceTable, sourceColumn, targetTable, targetColumn } = arg1
+    const sCol = sourceColumn.replace(/-source$/, '')
+    const tCol = targetColumn.replace(/-target$/, '')
+    
+    return `SELECT * \nFROM ${quote(sourceTable)} \nJOIN ${quote(targetTable)} \nON ${quote(sourceTable)}.${quote(sCol)} = ${quote(targetTable)}.${quote(tCol)} \nLIMIT 100;`
+  }
+
+  const nodes = arg1 as Node[]
 
   // Generate CREATE TABLE statements
   nodes.filter(n => n.type === 'table').forEach(node => {
@@ -34,7 +45,7 @@ export const generateSQL = (nodes: Node[], edges: Edge[], dbType: 'pg' | 'mysql2
   })
 
   // Generate Foreign Keys
-  if (edges.length > 0) {
+  if (edges && edges.length > 0) {
     sql += '-- Foreign Keys\n'
     edges.forEach(edge => {
       const sourceNode = nodes.find(n => n.id === edge.source)
