@@ -44,7 +44,7 @@ export default defineEventHandler(async (event) => {
     }
     
     // Get table metadata from the connection
-    const metadataResponse = await $fetch('/api/metadata', {
+    const metadataResponse = await $fetch<{ success: boolean; data?: any; error?: string }>('/api/metadata', {
       method: 'POST',
       body: {
         type: connection.type,
@@ -56,7 +56,7 @@ export default defineEventHandler(async (event) => {
       }
     })
     
-    if (!metadataResponse.success) {
+    if (!metadataResponse.success || !metadataResponse.data) {
       throw createError({
         statusCode: 500,
         statusMessage: 'Failed to fetch metadata'

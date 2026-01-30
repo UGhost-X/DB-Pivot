@@ -42,7 +42,9 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const searchQuery = ref('')
 const selectedRelationships = ref<Set<string>>(new Set())
-const expandedSections = ref({
+type ExpandedSectionKey = 'foreignKey' | 'patternMatch' | 'highConfidence'
+
+const expandedSections = ref<Record<ExpandedSectionKey, boolean>>({
   foreignKey: true,
   patternMatch: true,
   highConfidence: true
@@ -145,7 +147,7 @@ const handleQueryRelationship = (edgeId: string) => {
   emit('query-relationship', edgeId)
 }
 
-const toggleSection = (section: string) => {
+const toggleSection = (section: ExpandedSectionKey) => {
   expandedSections.value[section] = !expandedSections.value[section]
 }
 

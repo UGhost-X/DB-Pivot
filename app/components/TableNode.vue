@@ -17,7 +17,10 @@ const props = defineProps<{
       isForeignKey?: boolean; 
       nullable?: boolean; 
       isHidden?: boolean;
-      highlightType?: 'source' | 'target' | null 
+      highlightType?: 'source' | 'target' | null;
+      highlightColor?: string;
+      isConnectedSource?: boolean;
+      isConnectedTarget?: boolean;
     }>
     isView?: boolean
     color?: string
@@ -96,11 +99,11 @@ const getTypeIcon = (type: string) => {
 
 <template>
   <Card 
-    class="min-w-[240px] overflow-hidden text-sm border shadow-sm hover:shadow-xl transition-all duration-300 bg-card text-foreground relative"
+    class="min-w-[240px] text-sm border shadow-sm hover:shadow-xl transition-all duration-300 bg-card text-foreground relative"
     :class="selected ? 'border-blue-400 ring-2 ring-blue-400 shadow-lg shadow-blue-400/20' : 'border-border/40 hover:border-border/80'"
   >
     <div 
-        class="px-3 py-2 border-b border-border/40 flex items-center justify-between cursor-pointer"
+        class="px-3 py-2 border-b border-border/40 flex items-center justify-between cursor-pointer rounded-t-lg"
         :style="headerStyle"
       >
         <div class="flex-grow text-center truncate px-1">
@@ -120,10 +123,11 @@ const getTypeIcon = (type: string) => {
         :key="col.name" 
         class="h-7 px-3 flex items-center justify-between group transition-colors relative cursor-pointer"
         :class="{
-          'hover:bg-muted/40': !col.highlightType,
-          'bg-green-100/50 dark:bg-green-900/20 hover:bg-green-100/70 dark:hover:bg-green-900/30': col.highlightType === 'source',
-          'bg-red-100/50 dark:bg-red-900/20 hover:bg-red-100/70 dark:hover:bg-red-900/30': col.highlightType === 'target'
+          'hover:bg-muted/40': !col.highlightType && !col.highlightColor,
+          'bg-green-100/50 dark:bg-green-900/20 hover:bg-green-100/70 dark:hover:bg-green-900/30': !col.highlightColor && col.highlightType === 'source',
+          'bg-red-100/50 dark:bg-red-900/20 hover:bg-red-100/70 dark:hover:bg-red-900/30': !col.highlightColor && col.highlightType === 'target'
         }"
+        :style="col.highlightColor ? { backgroundColor: col.highlightColor } : {}"
         @contextmenu="handleContextMenu($event, col)"
         @dblclick="handleDblClick($event, col)"
         @click="handleClick($event, col)"
@@ -133,14 +137,16 @@ const getTypeIcon = (type: string) => {
         <Handle 
           :id="`${col.name}-target`"
           type="target" 
-          :position="Position.Left" 
-          class="!opacity-0 group-hover:!opacity-100 !w-2 !h-2 !-left-1 !bg-primary !border-none transition-opacity" 
+          :position="Position.Right" 
+          class="!w-2 !h-2.5 !-right-[5px] !bg-blue-300 hover:!bg-blue-400 !border-none transition-all !rounded-[1px]" 
+          :class="col.isConnectedTarget ? '!opacity-100' : '!opacity-0 group-hover:!opacity-100'"
         />
         <Handle 
           :id="`${col.name}-source`"
           type="source" 
           :position="Position.Right" 
-          class="!opacity-0 group-hover:!opacity-100 !w-2 !h-2 !-right-1 !bg-primary !border-none transition-opacity" 
+          class="!w-2 !h-2.5 !-right-[5px] !bg-blue-300 hover:!bg-blue-400 !border-none transition-all !rounded-[1px]" 
+          :class="col.isConnectedSource ? '!opacity-100' : '!opacity-0 group-hover:!opacity-100'"
         />
         
         <div class="flex items-center gap-1.5 overflow-hidden flex-1">
@@ -175,7 +181,7 @@ const getTypeIcon = (type: string) => {
         </div>
       </div>
 
-      <div v-if="hiddenColumns.length > 0" class="px-3 py-2 bg-muted/30 border-t border-border/40">
+      <div v-if="hiddenColumns.length > 0" class="px-3 py-2 bg-muted/30 border-t border-border/40 rounded-b-lg">
         <Popover>
           <PopoverTrigger as-child>
             <div class="text-xs text-muted-foreground italic cursor-pointer hover:text-foreground flex items-center gap-1">

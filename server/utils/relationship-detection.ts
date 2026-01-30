@@ -152,7 +152,7 @@ export function detectPatternRelationships(
   const tableNames = Object.keys(tables)
   
   for (const sourceTableName of tableNames) {
-    const sourceColumns = tables[sourceTableName]
+    const sourceColumns = tables[sourceTableName] || []
     
     for (const sourceColumn of sourceColumns) {
       // Skip if column is already a primary key
@@ -165,7 +165,7 @@ export function detectPatternRelationships(
         for (const targetTableName of tableNames) {
           if (sourceTableName === targetTableName) continue
           
-          const targetColumns = tables[targetTableName]
+          const targetColumns = tables[targetTableName] || []
           const targetPrimaryKey = targetColumns.find(col => col.isPrimaryKey)
           
           if (!targetPrimaryKey) continue

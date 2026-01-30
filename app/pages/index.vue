@@ -87,31 +87,46 @@ const detectedPatternEdges = computed(() => {
       sourceHandleLabel: e.data?.sourceHandleLabel || 'Unknown',
       targetNodeLabel: e.data?.targetNodeLabel || 'Unknown',
       targetHandleLabel: e.data?.targetHandleLabel || 'Unknown',
-      ruleName: e.data?.ruleName
+      ruleName: e.data?.ruleName,
+      isHidden: e.hidden
     }))
 })
 
 const handleSelectDetectedEdge = (edgeId: string) => {
+  handleSelectDetectedEdges(edgeId ? [edgeId] : [])
+}
+
+const handleSelectDetectedEdges = (edgeIds: string[]) => {
+  const idSet = new Set(edgeIds)
   nodes.value.forEach(n => n.selected = false)
+
+  const selectedEdges: Edge[] = []
+
   edges.value.forEach(e => {
-    e.selected = e.id === edgeId
-    // Force style update if needed
-    if (e.selected) {
+    if (idSet.has(e.id)) {
+      e.selected = true
       e.animated = true
       e.style = { ...e.style, strokeWidth: 3, stroke: 'hsl(var(--primary))' }
+      selectedEdges.push(e)
     } else {
+      e.selected = false
       e.animated = false
       e.style = { ...e.style, strokeWidth: 2, stroke: undefined }
     }
   })
   
-  const edge = edges.value.find(e => e.id === edgeId)
-  if (edge) {
+  if (selectedEdges.length === 0) return
+
+  const selectedNodes: Node[] = []
+  selectedEdges.forEach(edge => {
     const sourceNode = nodes.value.find(n => n.id === edge.source)
     const targetNode = nodes.value.find(n => n.id === edge.target)
-    if (sourceNode && targetNode) {
-       fitView({ nodes: [sourceNode, targetNode], padding: 0.5, duration: 800 })
-    }
+    if (sourceNode) selectedNodes.push(sourceNode)
+    if (targetNode) selectedNodes.push(targetNode)
+  })
+
+  if (selectedNodes.length > 0) {
+    fitView({ nodes: selectedNodes.map(n => n.id), padding: 0.5, duration: 800 })
   }
 }
 
@@ -123,6 +138,22 @@ const handleDeleteDetectedEdge = (edgeId: string) => {
 const handleDeleteDetectedEdges = (edgeIds: string[]) => {
   removeEdges(edgeIds)
   toast.success(`已删除 ${edgeIds.length} 个关系`)
+}
+
+const handleToggleEdgeVisibility = (edgeId: string, isHidden: boolean) => {
+  const edge = edges.value.find(e => e.id === edgeId)
+  if (edge) {
+    edge.hidden = isHidden
+  }
+}
+
+const handleToggleEdgesVisibility = (edgeIds: string[], isHidden: boolean) => {
+  edgeIds.forEach(id => {
+    const edge = edges.value.find(e => e.id === id)
+    if (edge) {
+      edge.hidden = isHidden
+    }
+  })
 }
 
 const handleAddRule = (rule: PatternRule) => {
@@ -162,12 +193,61 @@ const handleQueryRelationship = (edgeId: string) => {
   }
 }
 
+const RULE_COLORS = [
+  'rgba(255, 99, 71, 0.3)',   // Tomato
+  'rgba(60, 179, 113, 0.3)',  // MediumSeaGreen
+  'rgba(30, 144, 255, 0.3)',  // DodgerBlue
+  'rgba(238, 130, 238, 0.3)', // Violet
+  'rgba(255, 165, 0, 0.3)',   // Orange
+  'rgba(106, 90, 205, 0.3)',  // SlateBlue
+  'rgba(255, 20, 147, 0.3)',  // DeepPink
+  'rgba(0, 206, 209, 0.3)',   // DarkTurquoise
+]
+
+const getRuleColor = (index: number) => RULE_COLORS[index % RULE_COLORS.length]
+
+const updateConnectedState = () => {
+  const connectedSources = new Set<string>()
+  const connectedTargets = new Set<string>()
+
+  edges.value.forEach(edge => {
+    if (edge.hidden) return
+    if (edge.source && edge.sourceHandle) {
+      connectedSources.add(`${edge.source}:${edge.sourceHandle}`)
+    }
+    if (edge.target && edge.targetHandle) {
+      connectedTargets.add(`${edge.target}:${edge.targetHandle}`)
+    }
+  })
+
+  nodes.value.forEach(node => {
+    if (node.type === 'table' && node.data.columns) {
+      node.data.columns.forEach((col: any) => {
+        const sourceKey = `${node.id}:${col.name}-source`
+        const targetKey = `${node.id}:${col.name}-target`
+        
+        col.isConnectedSource = connectedSources.has(sourceKey)
+        col.isConnectedTarget = connectedTargets.has(targetKey)
+      })
+    }
+  })
+}
+
+watch(edges, () => {
+  updateConnectedState()
+}, { deep: true, immediate: true })
+
+watch(nodes, () => {
+  updateConnectedState()
+}, { deep: false })
+
 const updateColumnHighlights = () => {
   // Reset all highlights first
   nodes.value.forEach(node => {
     if (node.type === 'table' && node.data.columns) {
       node.data.columns.forEach((col: any) => {
         col.highlightType = null
+        col.highlightColor = null
       })
     }
   })
@@ -186,7 +266,8 @@ const updateColumnHighlights = () => {
     const columns = node.data.columns || []
     
     columns.forEach((col: any) => {
-      for (const rule of patternRules.value) {
+      // Use index to assign colors
+      for (const [ruleIndex, rule] of patternRules.value.entries()) {
         if (!rule.isActive) continue
 
         // Check Table Pattern
@@ -205,8 +286,12 @@ const updateColumnHighlights = () => {
           const match = col.name.match(sourceRegex)
 
           if (match) {
+            // Determine color for this rule
+            const ruleColor = getRuleColor(ruleIndex)
+
             // Highlight Source Column
             col.highlightType = 'source'
+            col.highlightColor = ruleColor
 
             // Find Target Table(s)
             let targetTablePattern = rule.targetPattern
@@ -257,6 +342,7 @@ const updateColumnHighlights = () => {
               
               if (targetCol) {
                 targetCol.highlightType = 'target'
+                targetCol.highlightColor = ruleColor
               }
             }
           }
@@ -270,7 +356,7 @@ const updateColumnHighlights = () => {
 
 const handleHighlightColumns = () => {
   updateColumnHighlights()
-  toast.info('列已标记', { description: '源列显示为绿色，目标列显示为红色' })
+  toast.info('列已标记', { description: '同一规则匹配的源列和目标列使用相同颜色显示' })
 }
 
 const handleCancelHighlight = () => {
@@ -278,6 +364,7 @@ const handleCancelHighlight = () => {
     if (node.type === 'table' && node.data.columns) {
       node.data.columns.forEach((col: any) => {
         col.highlightType = null
+        col.highlightColor = null
       })
     }
   })
@@ -1456,7 +1543,17 @@ onPaneContextMenu((event: any) => {
   }
 })
 
-const startConnection = (tableName: string, columnName: string) => {
+const updateMouseNodePosition = (event: MouseEvent) => {
+  if (connectingState.value.active) {
+    const mouseNode = findNode('mouse-node')
+    if (mouseNode) {
+      const position = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+      mouseNode.position = position
+    }
+  }
+}
+
+const startConnection = (tableName: string, columnName: string, clientPos?: { x: number, y: number }) => {
   if (connectingState.value.active) {
     cancelConnection()
   }
@@ -1467,16 +1564,29 @@ const startConnection = (tableName: string, columnName: string) => {
     sourceColumn: columnName
   }
 
+  // Add global mouse listener
+  window.addEventListener('mousemove', updateMouseNodePosition)
+
   // Add temporary mouse node and edge
   const mouseNodeId = 'mouse-node'
   const tempEdgeId = 'temp-connection-edge'
   const sourceId = `table-${tableName}`
   const sourceHandle = `${columnName}-source`
 
+  let position = { x: 0, y: 0 }
+  if (clientPos) {
+    position = screenToFlowCoordinate({ x: clientPos.x, y: clientPos.y })
+  } else {
+    // If no position provided, try to center it on viewport or something reasonable
+    // For now fallback to 0,0 but ideally we should avoid this path
+    const viewportCenter = { x: -viewport.value.x / viewport.value.zoom + window.innerWidth / 2 / viewport.value.zoom, y: -viewport.value.y / viewport.value.zoom + window.innerHeight / 2 / viewport.value.zoom }
+    position = viewportCenter
+  }
+
   addNodes([{
     id: mouseNodeId,
     type: 'default',
-    position: { x: 0, y: 0 },
+    position,
     style: { opacity: 0, width: '1px', height: '1px', pointerEvents: 'none' },
     data: { label: '' }
   }])
@@ -2229,9 +2339,12 @@ onBeforeUnmount(() => {
           @confirm-connection="handleConfirmConnection"
           @close="isPatternConfigOpen = false"
           @select-edge="handleSelectDetectedEdge"
+          @select-edges="handleSelectDetectedEdges"
           @delete-edge="handleDeleteDetectedEdge"
           @delete-edges="handleDeleteDetectedEdges"
           @query-edge="handleQueryRelationship"
+          @toggle-edge-visibility="handleToggleEdgeVisibility"
+          @toggle-edges-visibility="handleToggleEdgesVisibility"
         />
       </div>
     </Transition>

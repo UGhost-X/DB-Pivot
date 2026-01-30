@@ -1,5 +1,6 @@
 import knex from 'knex'
 import { LRUCache } from 'lru-cache'
+import type { Prisma } from '@prisma/client'
 import prisma from './prisma'
 
 // Use the Prisma enums directly since they might not be available as named exports
@@ -9,6 +10,8 @@ const TableRelationshipType = {
   MANY_TO_ONE: 'MANY_TO_ONE',
   MANY_TO_MANY: 'MANY_TO_MANY'
 } as const
+
+type TableRelationshipTypeValue = (typeof TableRelationshipType)[keyof typeof TableRelationshipType]
 
 /**
  * Interface for query execution context
@@ -36,7 +39,7 @@ export interface QueryResultNode {
  * Interface for query result relationship
  */
 export interface QueryResultRelationship {
-  type: TableRelationshipType
+  type: TableRelationshipTypeValue
   targetTable: string
   targetData: any[]
 }
@@ -98,6 +101,8 @@ export async function executeDeepQuery(
   })
   
   try {
+    const startTime = Date.now()
+
     // Execute the recursive query
     const context: QueryContext = {
       connection: query.connection,
@@ -120,15 +125,16 @@ export async function executeDeepQuery(
     await prisma.deepQuery.update({
       where: { id: queryId },
       data: {
-        lastResult: result,
+        lastResult: result as unknown as Prisma.InputJsonValue,
         lastExecutedAt: new Date(),
-        executionTime: Date.now() - performance.now()
+        executionTime: Date.now() - startTime
       }
     })
     
     // Cache the result if enabled
     if (query.useCache) {
-      queryCache.set(cacheKey, result, { ttl: query.cacheDuration * 1000 })
+      const ttlMs = (query.cacheDuration ?? 300) * 1000
+      queryCache.set(cacheKey, result, { ttl: ttlMs })
     }
     
     return result
@@ -271,7 +277,7 @@ function buildFieldSelection(tableName: string, context: QueryContext): string[]
 /**
  * Get reverse relationship type
  */
-function getReverseRelationshipType(type: TableRelationshipType): TableRelationshipType {
+function getReverseRelationshipType(type: TableRelationshipTypeValue): TableRelationshipTypeValue {
   switch (type) {
     case TableRelationshipType.ONE_TO_MANY:
       return TableRelationshipType.MANY_TO_ONE
@@ -293,7 +299,7 @@ export async function generateRecursiveSQL(
 ): Promise<string> {
   const query = await prisma.deepQuery.findFirst({
     where: { id: queryId, ownerId: userId },
-    include: { connection: true, connection: { include: { tableRelationships: true } } }
+    include: { connection: { include: { tableRelationships: true } } }
   })
   
   if (!query) {
