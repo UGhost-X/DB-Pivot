@@ -23,7 +23,9 @@ import {
   Calendar,
   ToggleLeft,
   Network,
-  Settings
+  Settings,
+  Trash2,
+  Minus
 } from 'lucide-vue-next'
 import PgsqlSvg from '@/assets/icons/Pgsql.svg?component'
 import MysqlSvg from '@/assets/icons/Mysql.svg?component'
@@ -47,6 +49,7 @@ const emit = defineEmits<{
   (e: 'select-connection', conn: any): void
   (e: 'connection-context-menu', payload: { event: MouseEvent, conn: any }): void
   (e: 'add-table', tableName: string): void
+  (e: 'remove-table', tableName: string): void
   (e: 'open-relationship-query'): void
   (e: 'open-pattern-config'): void
 }>()
@@ -293,6 +296,16 @@ const getAvailableTables = (tables: string[]) => {
                                         />
                                         <Table class="w-3 h-3 shrink-0" />
                                         <span class="truncate">{{ tableName }}</span>
+                                      </div>
+                                      
+                                      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button 
+                                          class="p-1 hover:bg-destructive/10 hover:text-destructive rounded-sm transition-colors"
+                                          @click.stop="emit('remove-table', tableName)"
+                                          :title="t('canvas.context.deleteNode')"
+                                        >
+                                          <Minus class="w-3 h-3" />
+                                        </button>
                                       </div>
                                     </div>
                                   

@@ -20,7 +20,7 @@ import {
   Trash2, Link, EyeOff, FileCode,
   Loader2, Pencil, Activity,
   History, LayoutGrid, Undo2, Redo2, Hand, MousePointer2, PanelLeftOpen, PanelLeftClose,
-  Paintbrush, Settings
+  Paintbrush, Settings, Tags
 } from 'lucide-vue-next'
 import { generateSQL } from '@/utils/sqlGenerator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -30,11 +30,12 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useAuth } from '@/composables/useAuth'
 import { useI18n } from '@/composables/useI18n'
 
-const { nodes, edges, addNodes, toObject, fromObject, setNodes, setEdges, zoomIn, zoomOut, fitView, viewport, setViewport, addEdges, removeNodes, removeEdges, findNode, onPaneReady, onNodesChange, onEdgesChange, onPaneMouseMove, screenToFlowCoordinate, onPaneClick, onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu, onMoveEnd, onEdgeDoubleClick } = useVueFlow()
+const { nodes, edges, addNodes, toObject, fromObject, setNodes, setEdges, zoomIn, zoomOut, fitView, viewport, setViewport, addEdges, removeNodes, removeEdges, findNode, onPaneReady, onNodesChange, onEdgesChange, onPaneMouseMove, screenToFlowCoordinate, onPaneClick, onNodeContextMenu, onEdgeContextMenu, onPaneContextMenu, onMoveEnd, onEdgeDoubleClick, onEdgeMouseEnter, onEdgeMouseLeave } = useVueFlow()
 const { user, logout } = useAuth()
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const flowWrapper = ref<HTMLElement | null>(null)
 const projectId = computed(() => route.query.projectId ? parseInt(String(route.query.projectId)) : null)
 const project = ref<any>(null)
 const canvasId = ref<number | null>(null)
@@ -48,11 +49,13 @@ const isExitDraftDialogOpen = ref(false)
 const pendingNavigation = ref<any>(null)
 const allowNavigationOnce = ref(false)
 const isRestoringCanvas = ref(false)
+const isLoadingProject = ref(false)
 
 // Layout State
 const isAppSidebarCollapsed = ref(false)
 const isCanvasSidebarOpen = ref(true)
-const interactionMode = ref<'pointer' | 'hand'>('pointer')
+const interactionMode = ref<'pointer' | 'hand'>('hand')
+const connectionMode = ref<'line' | 'reference'>('line')
 
 // Relationship Features
 const isRelationshipQueryOpen = ref(false)
@@ -96,9 +99,126 @@ const handleSelectDetectedEdge = (edgeId: string) => {
   handleSelectDetectedEdges(edgeId ? [edgeId] : [])
 }
 
+const clearLocateToken = ref(0)
+let isStoppingLocateFromOutside = false
+
+const clearLocateColumns = () => {
+  setNodes((current) =>
+    current.map((node) => {
+      if (node.type !== 'table') return node
+      if (!node.data || !('locateColumns' in (node.data as any))) return node
+      const { locateColumns, ...rest } = node.data as any
+      return { ...node, data: rest }
+    })
+  )
+}
+
+const stopLocateColumns = () => {
+  isStoppingLocateFromOutside = true
+  clearLocateColumns()
+  clearLocateToken.value += 1
+  nextTick(() => {
+    isStoppingLocateFromOutside = false
+  })
+}
+
+const startLocateColumns = (targets: Array<{ nodeId: string; columnName: string }>) => {
+  if (connectionMode.value !== 'reference') return
+
+  const map = new Map<string, Set<string>>()
+  targets.forEach(({ nodeId, columnName }) => {
+    if (!nodeId || !columnName) return
+    if (!map.has(nodeId)) map.set(nodeId, new Set())
+    map.get(nodeId)!.add(columnName)
+  })
+
+  setNodes((current) =>
+    current.map((node) => {
+      if (node.type !== 'table') return node
+      const cols = Array.from(map.get(node.id) || [])
+      return {
+        ...node,
+        data: {
+          ...(node.data || {}),
+          locateColumns: cols,
+        },
+      }
+    })
+  )
+}
+
+const isNodeVisible = (nodeId: string): boolean => {
+  const node = findNode(nodeId)
+  if (!node || !import.meta.client) return false
+
+  const { x, y, zoom } = viewport.value
+  const rect = flowWrapper.value?.getBoundingClientRect()
+  const width = rect?.width || window.innerWidth
+  const height = rect?.height || window.innerHeight
+
+  // Calculate visible area in flow coordinates
+  const visibleX = -x / zoom
+  const visibleY = -y / zoom
+  const visibleWidth = width / zoom
+  const visibleHeight = height / zoom
+
+  // Define a "visual center" margin (e.g., 10% from edges)
+  const marginX = visibleWidth * 0.1
+  const marginY = visibleHeight * 0.1
+
+  const safeLeft = visibleX + marginX
+  const safeRight = visibleX + visibleWidth - marginX
+  const safeTop = visibleY + marginY
+  const safeBottom = visibleY + visibleHeight - marginY
+
+  // Node position (center)
+  const nodeWidth = node.dimensions?.width || 250
+  const nodeHeight = node.dimensions?.height || 300
+  const nodeCenterX = node.position.x + nodeWidth / 2
+  const nodeCenterY = node.position.y + nodeHeight / 2
+
+  return (
+    nodeCenterX >= safeLeft &&
+    nodeCenterX <= safeRight &&
+    nodeCenterY >= safeTop &&
+    nodeCenterY <= safeBottom
+  )
+}
+
 const handleSelectDetectedEdges = (edgeIds: string[]) => {
   const idSet = new Set(edgeIds)
   nodes.value.forEach(n => n.selected = false)
+
+  if (connectionMode.value === 'reference') {
+    if (edgeIds.length === 0) {
+      if (isStoppingLocateFromOutside) {
+        return
+      }
+      stopLocateColumns()
+      return
+    }
+    clearLocateColumns()
+    const targets: Array<{ nodeId: string; columnName: string }> = []
+    edges.value.forEach((e) => {
+      if (!idSet.has(e.id)) return
+      if (e.source && e.sourceHandle) {
+        targets.push({ nodeId: e.source, columnName: String(e.sourceHandle).replace(/-source$/, '') })
+      }
+      if (e.target && e.targetHandle) {
+        targets.push({ nodeId: e.target, columnName: String(e.targetHandle).replace(/-target$/, '') })
+      }
+    })
+    if (targets.length > 0) {
+      startLocateColumns(targets)
+      const targetNodeIds = [...new Set(targets.map(t => t.nodeId))]
+      const allVisible = targetNodeIds.every(id => isNodeVisible(id))
+      
+      if (!allVisible) {
+         fitView({ nodes: targetNodeIds, padding: 0.5, duration: 800 })
+      }
+    }
+    return
+  }
 
   const selectedEdges: Edge[] = []
 
@@ -126,7 +246,10 @@ const handleSelectDetectedEdges = (edgeIds: string[]) => {
   })
 
   if (selectedNodes.length > 0) {
-    fitView({ nodes: selectedNodes.map(n => n.id), padding: 0.5, duration: 800 })
+    const allVisible = selectedNodes.every(n => isNodeVisible(n.id))
+    if (!allVisible) {
+      fitView({ nodes: selectedNodes.map(n => n.id), padding: 0.5, duration: 800 })
+    }
   }
 }
 
@@ -143,7 +266,10 @@ const handleDeleteDetectedEdges = (edgeIds: string[]) => {
 const handleToggleEdgeVisibility = (edgeId: string, isHidden: boolean) => {
   const edge = edges.value.find(e => e.id === edgeId)
   if (edge) {
-    edge.hidden = isHidden
+    if (!edge.data) edge.data = {}
+    edge.data.isHidden = isHidden
+    syncEdgeVisibility()
+    updateConnectionState()
   }
 }
 
@@ -151,9 +277,12 @@ const handleToggleEdgesVisibility = (edgeIds: string[], isHidden: boolean) => {
   edgeIds.forEach(id => {
     const edge = edges.value.find(e => e.id === id)
     if (edge) {
-      edge.hidden = isHidden
+      if (!edge.data) edge.data = {}
+      edge.data.isHidden = isHidden
     }
   })
+  syncEdgeVisibility()
+  updateConnectionState()
 }
 
 const handleAddRule = (rule: PatternRule) => {
@@ -206,40 +335,145 @@ const RULE_COLORS = [
 
 const getRuleColor = (index: number) => RULE_COLORS[index % RULE_COLORS.length]
 
-const updateConnectedState = () => {
+let isSyncingConnectionState = false
+
+const updateConnectionState = () => {
+  if (isSyncingConnectionState) return
   const connectedSources = new Set<string>()
   const connectedTargets = new Set<string>()
+  const nodeReferences = new Map<string, any[]>()
+
+  // Initialize map for all table nodes
+  nodes.value.forEach(n => {
+    if (n.type === 'table') nodeReferences.set(n.id, [])
+  })
 
   edges.value.forEach(edge => {
-    if (edge.hidden) return
+    const isUserHidden = edge.data?.isHidden ?? edge.hidden ?? false
+    if (isUserHidden) return
+
     if (edge.source && edge.sourceHandle) {
       connectedSources.add(`${edge.source}:${edge.sourceHandle}`)
     }
     if (edge.target && edge.targetHandle) {
       connectedTargets.add(`${edge.target}:${edge.targetHandle}`)
     }
+
+    // Generate References if in Reference Mode
+    if (connectionMode.value === 'reference') {
+       const sourceNode = nodes.value.find(n => n.id === edge.source)
+       const targetNode = nodes.value.find(n => n.id === edge.target)
+       
+       if (sourceNode && targetNode) {
+          // Add to Source Node
+          if (nodeReferences.has(edge.source)) {
+            nodeReferences.get(edge.source)?.push({
+              type: 'source',
+              column: edge.sourceHandle?.replace('-source', ''),
+              targetTable: targetNode.data.label,
+              targetColumn: edge.targetHandle?.replace('-target', ''),
+              edgeId: edge.id,
+              targetNodeId: edge.target
+            })
+          }
+
+          // Add to Target Node
+          if (nodeReferences.has(edge.target)) {
+            nodeReferences.get(edge.target)?.push({
+              type: 'target',
+              column: edge.targetHandle?.replace('-target', ''),
+              sourceTable: sourceNode.data.label,
+              sourceColumn: edge.sourceHandle?.replace('-source', ''),
+              edgeId: edge.id,
+              targetNodeId: edge.source
+            })
+          }
+       }
+    }
   })
 
-  nodes.value.forEach(node => {
-    if (node.type === 'table' && node.data.columns) {
-      node.data.columns.forEach((col: any) => {
+  const mode = connectionMode.value
+
+  isSyncingConnectionState = true
+  setNodes((current) =>
+    current.map((node) => {
+      if (node.type !== 'table' || !node.data?.columns) return node
+
+      const refs = nodeReferences.get(node.id) || []
+      const refsByCol: Record<string, any[]> = {}
+      refs.forEach((ref: any) => {
+        const col = ref.column
+        if (!refsByCol[col]) refsByCol[col] = []
+        refsByCol[col].push(ref)
+      })
+
+      const nextColumns = (node.data.columns as any[]).map((col: any) => {
         const sourceKey = `${node.id}:${col.name}-source`
         const targetKey = `${node.id}:${col.name}-target`
-        
-        col.isConnectedSource = connectedSources.has(sourceKey)
-        col.isConnectedTarget = connectedTargets.has(targetKey)
+        const showConnected = mode === 'line'
+
+        return {
+          ...col,
+          isConnectedSource: showConnected && connectedSources.has(sourceKey),
+          isConnectedTarget: showConnected && connectedTargets.has(targetKey),
+        }
       })
-    }
+
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          connectionMode: mode,
+          columns: nextColumns,
+          connectedReferences: mode === 'reference' ? refsByCol : null,
+        },
+      }
+    })
+  )
+  nextTick(() => {
+    isSyncingConnectionState = false
   })
 }
 
-watch(edges, () => {
-  updateConnectedState()
+const syncEdgeVisibility = () => {
+  const mode = connectionMode.value
+  setEdges((current) =>
+    current.map((edge) => {
+      const userHidden = (edge.data as any)?.isHidden ?? edge.hidden ?? false
+      const nextHidden = mode === 'reference' ? true : userHidden
+      const needsData = !edge.data || typeof (edge.data as any).isHidden === 'undefined'
+
+      if (!needsData && edge.hidden === nextHidden) return edge
+
+      return {
+        ...edge,
+        hidden: nextHidden,
+        data: {
+          ...(edge.data || {}),
+          isHidden: userHidden,
+        },
+      }
+    })
+  )
+}
+
+watch([edges, connectionMode], () => {
+  updateConnectionState()
 }, { deep: true, immediate: true })
 
 watch(nodes, () => {
-  updateConnectedState()
+  updateConnectionState()
 }, { deep: false })
+
+watch(connectionMode, () => {
+  syncEdgeVisibility()
+}, { immediate: true })
+
+const setConnectionMode = (mode: 'line' | 'reference') => {
+  connectionMode.value = mode
+  syncEdgeVisibility()
+  updateConnectionState()
+}
 
 const updateColumnHighlights = () => {
   // Reset all highlights first
@@ -644,7 +878,8 @@ const projectName = ref('')
 const isSaveDialogOpen = ref(false)
 const isConnectionDialogOpen = ref(false)
 const editingConnection = ref<any>(null)
-const hoveredForeignKey = ref<{ tableName: string; columnName: string } | null>(null)
+const hoveredColumn = ref<{ tableName: string; columnName: string } | null>(null)
+const hoveredEdgeId = ref<string | null>(null)
 let isUpdatingEdgeStyles = false
 
 const isHeaderColorDialogOpen = ref(false)
@@ -669,14 +904,19 @@ const applyEdgeDefaults = () => {
 const updateEdgeHighlights = () => {
   if (isUpdatingEdgeStyles) return
   isUpdatingEdgeStyles = true
-  const hovered = hoveredForeignKey.value
+  const hovered = hoveredColumn.value
+  const hoveredEdge = hoveredEdgeId.value
   const selectedNodeIds = new Set(nodes.value.filter((node) => node.selected).map((node) => node.id))
   setEdges((edges) =>
     edges.map((edge) => {
-      const isHoverMatch = hovered
+      const isColumnHoverMatch = hovered
         ? (edge.source === `table-${hovered.tableName}` && edge.sourceHandle === `${hovered.columnName}-source`) ||
           (edge.target === `table-${hovered.tableName}` && edge.targetHandle === `${hovered.columnName}-target`)
         : false
+      
+      const isEdgeHoverMatch = hoveredEdge === edge.id
+      const isHoverMatch = isColumnHoverMatch || isEdgeHoverMatch
+
       // Only highlight on hover, not on selection
       const isSelectedMatch = false 
       const nextClass = isHoverMatch || isSelectedMatch ? 'edge-active' : 'edge-muted'
@@ -702,6 +942,16 @@ const updateEdgeHighlights = () => {
   isUpdatingEdgeStyles = false
 }
 
+onEdgeMouseEnter(({ edge }) => {
+  hoveredEdgeId.value = edge.id
+  updateEdgeHighlights()
+})
+
+onEdgeMouseLeave(() => {
+  hoveredEdgeId.value = null
+  updateEdgeHighlights()
+})
+
 const hydrateTableNodes = () => {
   setNodes((nodes) =>
     nodes.map((node) => {
@@ -716,6 +966,7 @@ const hydrateTableNodes = () => {
           onCollapse: onCollapse,
           onToggleHidden: onToggleHidden,
           onHover: onColumnHover,
+          onReferenceClick: onReferenceClick,
         },
       }
     })
@@ -884,7 +1135,7 @@ const checkConnectionStatus = async (conn: any) => {
 // Load Project Data
 const loadProject = async () => {
   if (!projectId.value) return
-  
+  isLoadingProject.value = true
   try {
     const headers = useRequestHeaders(['cookie'])
     // 1. Load Connections
@@ -942,6 +1193,8 @@ const loadProject = async () => {
   } catch (error) {
     console.error('Failed to load project data', error)
     toast.error(t('toast.loadProjectFailed'))
+  } finally {
+    isLoadingProject.value = false
   }
 }
 
@@ -1117,6 +1370,7 @@ watch(patternRules, () => {
 
 // Note: onConnect is a specific event, need to wrap it or watch edges
 const onConnect = (params: Connection) => {
+  if (connectionMode.value === 'reference') return
   addEdges([params])
   scheduleSnapshot()
   if (isDraft.value) {
@@ -1554,6 +1808,7 @@ const updateMouseNodePosition = (event: MouseEvent) => {
 }
 
 const startConnection = (tableName: string, columnName: string, clientPos?: { x: number, y: number }) => {
+  if (connectionMode.value === 'reference') return
   if (connectingState.value.active) {
     cancelConnection()
   }
@@ -1676,6 +1931,10 @@ const onColumnContextMenu = ({ event, column, tableName }: any) => {
 }
 
 const onColumnDblClick = ({ event, column, tableName }: any) => {
+  if (connectionMode.value === 'reference') {
+    stopLocateColumns()
+    return
+  }
   startConnection(tableName, column.name)
 }
 
@@ -1819,13 +2078,55 @@ const connectDB = async () => {
 
 const onColumnHover = ({ tableName, columnName, isHovering }: { tableName: string, columnName: string, isHovering: boolean }) => {
   if (isHovering) {
-    hoveredForeignKey.value = { tableName, columnName }
+    hoveredColumn.value = { tableName, columnName }
   } else {
-    if (hoveredForeignKey.value?.tableName === tableName && hoveredForeignKey.value?.columnName === columnName) {
-      hoveredForeignKey.value = null
+    if (hoveredColumn.value?.tableName === tableName && hoveredColumn.value?.columnName === columnName) {
+      hoveredColumn.value = null
     }
   }
   updateEdgeHighlights()
+}
+
+const onReferenceClick = ({ targetNodeId, targetColumnName }: { targetNodeId: string, targetColumnName?: string }) => {
+  const node = findNode(targetNodeId)
+  if (!node) return
+
+  nodes.value.forEach(n => {
+    n.selected = n.id === targetNodeId
+  })
+
+  if (connectionMode.value === 'reference') {
+    if (import.meta.client && !isNodeVisible(targetNodeId)) {
+      const zoom = viewport.value.zoom
+      const width = node.dimensions?.width || 250
+      const height = node.dimensions?.height || 300
+      const centerX = node.position.x + width / 2
+      const centerY = node.position.y + height / 2
+      const nextX = window.innerWidth / 2 - centerX * zoom
+      const nextY = window.innerHeight / 2 - centerY * zoom
+      setViewport({ x: nextX, y: nextY, zoom })
+    }
+
+    if (targetColumnName) {
+      clearLocateColumns()
+      startLocateColumns([{ nodeId: targetNodeId, columnName: targetColumnName }])
+    }
+    return
+  }
+
+  if (!isNodeVisible(targetNodeId)) {
+    fitView({ nodes: [node.id], padding: 0.5, duration: 800 })
+  }
+}
+
+const handleGlobalDblClick = (event: MouseEvent) => {
+  if (connectionMode.value !== 'reference') return
+  const target = event.target as HTMLElement | null
+  if (!target) return
+  const inFlow = !!target.closest('.vue-flow')
+  const inNode = !!target.closest('.vue-flow__node')
+  if (!inFlow || inNode) return
+  stopLocateColumns()
 }
 
 const addTableToCanvas = (tableName: string) => {
@@ -1857,10 +2158,19 @@ const addTableToCanvas = (tableName: string) => {
       onClick: onColumnClick,
       onCollapse: onCollapse,
       onToggleHidden: onToggleHidden,
-      onHover: onColumnHover
+      onHover: onColumnHover,
+      onReferenceClick: onReferenceClick
     }
   }
   addNodes([newNode])
+}
+
+const removeTableFromCanvas = (tableName: string) => {
+  const tableId = `table-${tableName}`
+  const node = nodes.value.find(n => n.id === tableId)
+  if (node) {
+    removeNodes([tableId], true)
+  }
 }
 
 const loadCanvas = async () => {
@@ -1904,12 +2214,14 @@ const onBeforeUnload = (event: BeforeUnloadEvent) => {
 onMounted(async () => {
   if (import.meta.client) {
     window.addEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('dblclick', handleGlobalDblClick, true)
   }
 })
 
 onBeforeUnmount(() => {
   if (import.meta.client) {
     window.removeEventListener('beforeunload', onBeforeUnload)
+    window.removeEventListener('dblclick', handleGlobalDblClick, true)
   }
 })
 </script>
@@ -1938,12 +2250,13 @@ onBeforeUnmount(() => {
         @select-connection="selectConnection"
         @connection-context-menu="onConnectionContextMenu"
         @add-table="addTableToCanvas"
+        @remove-table="removeTableFromCanvas"
         @open-relationship-query="isRelationshipQueryOpen = true"
         @open-pattern-config="isPatternConfigOpen = true"
       />
 
     <!-- Column 3: Main Canvas Area -->
-    <div class="flex-1 h-full relative overflow-hidden bg-background">
+    <div ref="flowWrapper" class="flex-1 h-full relative overflow-hidden bg-background">
       <ContextMenu 
         :visible="contextMenu.visible" 
         :x="contextMenu.x" 
@@ -2189,20 +2502,37 @@ onBeforeUnmount(() => {
         :min-zoom="0.2"
         :max-zoom="4"
         :nodes-draggable="true"
-        :nodes-connectable="interactionMode === 'pointer'"
+        :nodes-connectable="interactionMode === 'pointer' && connectionMode === 'line'"
         :elements-selectable="true"
         :pan-on-drag="interactionMode === 'hand'"
         :selection-on-drag="interactionMode === 'pointer'"
         :selection-key-code="interactionMode === 'pointer' ? true : 'Shift'"
         @connect="onConnect"
       >
+        <!-- Loading Overlay -->
+        <div v-if="isLoadingProject" class="absolute inset-0 z-[100] flex items-center justify-center bg-background/50 backdrop-blur-sm">
+          <div class="flex flex-col items-center gap-3">
+            <Loader2 class="h-8 w-8 animate-spin text-primary" />
+            <span class="text-sm font-medium text-muted-foreground">{{ t('projects.loading') }}</span>
+          </div>
+        </div>
         <Background pattern-color="hsl(var(--border))" :gap="20" :size="1" />
         
         <!-- Canvas Toolbar (Left) -->
         <div class="absolute left-6 top-1/2 -translate-y-1/2 z-50 flex flex-col items-center gap-3 p-1 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl">
           <div class="flex flex-col items-center gap-2">
             <div class="flex flex-col items-center gap-2 p-1 rounded-full bg-muted/40">
-              <Button
+              <Button 
+              variant="ghost" 
+              size="icon" 
+              class="rounded-full h-9 w-9"
+              :class="{ 'bg-background text-foreground': interactionMode === 'hand' }"
+              :title="t('canvas.handMode')"
+              @click="interactionMode = 'hand'"
+            >
+              <Hand class="h-4 w-4" />
+            </Button>
+            <Button
                 variant="ghost"
                 size="icon"
                 class="rounded-full h-9 w-9"
@@ -2212,16 +2542,29 @@ onBeforeUnmount(() => {
               >
                 <MousePointer2 class="h-4 w-4" />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="rounded-full h-9 w-9"
-                :class="{ 'bg-background text-foreground': interactionMode === 'hand' }"
-                :title="t('canvas.handMode')"
-                @click="interactionMode = 'hand'"
-              >
-                <Hand class="h-4 w-4" />
-              </Button>
+
+            <div class="h-px w-6 bg-border/70 my-1"></div>
+
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              class="rounded-full h-9 w-9"
+              :class="{ 'bg-background text-foreground': connectionMode === 'line' }"
+              :title="t('canvas.lineMode')"
+              @click="setConnectionMode('line')"
+            >
+              <Link class="h-4 w-4" />
+            </Button>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              class="rounded-full h-9 w-9"
+              :class="{ 'bg-background text-foreground': connectionMode === 'reference' }"
+              :title="t('canvas.referenceMode')"
+              @click="setConnectionMode('reference')"
+            >
+              <Tags class="h-4 w-4" />
+            </Button>
             </div>
 
             <div class="h-px w-6 bg-border/70 my-1"></div>
@@ -2332,6 +2675,7 @@ onBeforeUnmount(() => {
           :rules="patternRules"
           :detection-result="detectionStats"
           :detected-edges="detectedPatternEdges"
+          :clear-locate-token="clearLocateToken"
           @add-rule="handleAddRule"
           @edit-rule="handleEditRule"
           @mark-columns="handleHighlightColumns"

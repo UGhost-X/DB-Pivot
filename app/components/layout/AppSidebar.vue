@@ -62,8 +62,15 @@ const isLoadingProjects = ref(false)
 const projects = ref<any[]>([])
 const projectCount = computed(() => projects.value.length)
 
+const handleProjectClick = (id: number) => {
+  router.push({ path: '/', query: { projectId: id } })
+}
+
 const toggleCollapse = () => {
   emit('update:isCollapsed', !props.isCollapsed)
+  if (props.isCollapsed) {
+    isProjectsMenuOpen.value = true
+  }
 }
 
 const loadProjects = () => {
@@ -137,60 +144,29 @@ onMounted(() => {
         </Tooltip>
 
         <!-- Projects Menu: Collapsed (Dropdown) -->
-        <DropdownMenu v-if="isCollapsed" v-model:open="isProjectsMenuOpen">
+        <div v-if="isCollapsed" class="flex flex-col items-center">
           <Tooltip>
             <TooltipTrigger as-child>
-              <DropdownMenuTrigger as-child>
-                <Button 
-                  variant="ghost" 
-                  :class="[
-                    'w-full justify-start gap-3 relative', 
-                    'justify-center px-0'
-                  ]"
+              <Button 
+                variant="ghost" 
+                :class="[
+                  'w-full justify-start gap-3 relative', 
+                  'justify-center px-0'
+                ]"
+                @click="toggleCollapse"
+              >
+                <LayoutGrid class="h-5 w-5" />
+                <span
+                  v-if="projectCount > 0"
+                  class="absolute top-0 right-0 h-3.5 min-w-[14px] px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-bold leading-[14px] text-center"
                 >
-                  <LayoutGrid class="h-5 w-5" />
-                  <span
-                    v-if="projectCount > 0"
-                    class="absolute top-0 right-0 h-3.5 min-w-[14px] px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-bold leading-[14px] text-center"
-                  >
-                    {{ projectCount }}
-                  </span>
-                </Button>
-              </DropdownMenuTrigger>
+                  {{ projectCount }}
+                </span>
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="right">{{ t('nav.projects') }}</TooltipContent>
           </Tooltip>
-
-          <DropdownMenuContent class="w-64" align="start" side="right">
-            <DropdownMenuLabel>{{ t('projects.myProjects') }}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-
-            <DropdownMenuGroup>
-              <DropdownMenuItem @select="loadProjects">
-                <FolderOpen class="mr-2 h-4 w-4" />
-                <span>{{ t('projects.loadProject') }}</span>
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-
-            <DropdownMenuSeparator />
-
-            <div v-if="isLoadingProjects" class="px-2 py-2 text-xs text-muted-foreground">{{ t('projects.loading') }}</div>
-            <div v-else-if="projects.length === 0" class="px-2 py-2 text-xs text-muted-foreground">{{ t('projects.empty') }}</div>
-            <DropdownMenuGroup v-else>
-              <DropdownMenuItem
-                v-for="p in projects"
-                :key="p.id"
-                class="flex items-center justify-between"
-                @select="router.push(`/?projectId=${p.id}`)"
-              >
-                <div class="flex items-center gap-2 min-w-0">
-                  <Folder class="h-4 w-4 shrink-0" />
-                  <span class="truncate">{{ p.name }}</span>
-                </div>
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        </div>
 
         <!-- Projects Menu: Expanded (Tree View) -->
         <div v-else class="flex flex-col gap-1">
@@ -214,13 +190,6 @@ onMounted(() => {
           </Button>
 
           <div v-if="isProjectsMenuOpen" class="pl-9 pr-2 space-y-1 animate-in slide-in-from-top-2 fade-in-50 duration-200">
-             <div
-               class="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-muted/50 text-sm text-muted-foreground cursor-pointer transition-colors"
-               @click="loadProjects"
-             >
-               <FolderOpen class="h-3.5 w-3.5 shrink-0" />
-               <span class="truncate">{{ t('projects.loadProject') }}</span>
-             </div>
              <div v-if="isLoadingProjects" class="px-2 py-1 text-xs text-muted-foreground">{{ t('projects.loading') }}</div>
              <div v-else-if="projects.length === 0" class="px-2 py-1 text-xs text-muted-foreground">{{ t('projects.empty') }}</div>
              <template v-else>
@@ -228,7 +197,7 @@ onMounted(() => {
                  v-for="p in projects"
                  :key="p.id"
                  class="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-muted/50 text-sm text-muted-foreground cursor-pointer transition-colors"
-                 @click="router.push(`/?projectId=${p.id}`)"
+                 @click="handleProjectClick(p.id)"
                >
                  <div class="flex items-center gap-2 min-w-0">
                    <Folder class="h-3.5 w-3.5 shrink-0" />

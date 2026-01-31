@@ -428,6 +428,7 @@ const props = defineProps<{
   rules?: PatternRule[]
   detectionResult?: DetectionResult | null
   detectedEdges?: DetectedEdge[]
+  clearLocateToken?: number
 }>()
 
 const emit = defineEmits<{
@@ -476,6 +477,13 @@ const editingRule = ref<PatternRule | null>(null)
 const selectedEdgeIds = ref<string[]>([])
 const locatedEdgeIds = ref<string[]>([])
 const collapsedGroups = ref<Record<string, boolean>>({})
+
+watch(() => props.clearLocateToken, () => {
+  selectedEdgeIds.value = []
+  locatedEdgeIds.value = []
+  emit('selectEdges', [])
+  emit('selectEdge', '')
+})
 
 const newRule = ref<PatternRule>({
   name: '',

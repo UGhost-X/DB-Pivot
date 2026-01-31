@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Handle, Position } from '@vue-flow/core'
-import { Key as KeyIcon, Link, MoreHorizontal, EyeOff, Hash, Type, Calendar, ToggleLeft } from 'lucide-vue-next'
+import { Key as KeyIcon, Link, MoreHorizontal, EyeOff, Hash, Type, Calendar, ToggleLeft, ArrowRight, ArrowLeft } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 
 const props = defineProps<{
@@ -31,6 +31,19 @@ const props = defineProps<{
     onCollapse?: (payload: { tableName: string, isCollapsed: boolean }) => void
     onToggleHidden?: (payload: { tableName: string, columnName: string, isHidden: boolean }) => void
     onHover?: (payload: { tableName: string, columnName: string, isHovering: boolean }) => void
+    connectionMode?: 'line' | 'reference';
+    locateColumns?: string[];
+    connectedReferences?: Record<string, Array<{
+      type: 'source' | 'target';
+      column: string;
+      targetTable?: string;
+      targetColumn?: string;
+      sourceTable?: string;
+      sourceColumn?: string;
+      edgeId: string;
+      targetNodeId?: string;
+    }>>;
+    onReferenceClick?: (payload: { targetNodeId: string, targetColumnName?: string }) => void;
   }
   selected?: boolean
 }>()
@@ -44,6 +57,12 @@ const headerStyle = computed(() => ({
 
 const visibleColumns = computed(() => props.data.columns.filter(c => !c.isHidden))
 const hiddenColumns = computed(() => props.data.columns.filter(c => c.isHidden))
+
+const openReferencePopoverColumn = ref<string | null>(null)
+
+const closeReferencePopover = () => {
+  openReferencePopoverColumn.value = null
+}
 
 const handleContextMenu = (event: MouseEvent, col: any) => {
   if (props.data.onContextMenu) {
@@ -80,10 +99,22 @@ const toggleHidden = (colName: string) => {
 }
 
 const handleHover = (col: any, isHovering: boolean) => {
-  if (!col.isForeignKey) return
   if (props.data.onHover) {
     props.data.onHover({ tableName: props.data.label, columnName: col.name, isHovering })
   }
+}
+
+const getReferences = (colName: string) => {
+  if (!props.data.connectedReferences) return []
+  return props.data.connectedReferences[colName] || []
+}
+
+const handleReferenceClick = (ref: any) => {
+  if (props.data.onReferenceClick && ref.targetNodeId) {
+    const targetColumnName = ref.type === 'source' ? ref.targetColumn : ref.sourceColumn
+    props.data.onReferenceClick({ targetNodeId: ref.targetNodeId, targetColumnName })
+  }
+  closeReferencePopover()
 }
 
 const getTypeIcon = (type: string) => {
@@ -134,20 +165,30 @@ const getTypeIcon = (type: string) => {
         @mouseenter="handleHover(col, true)"
         @mouseleave="handleHover(col, false)"
       >
-        <Handle 
-          :id="`${col.name}-target`"
-          type="target" 
-          :position="Position.Right" 
-          class="!w-2 !h-2.5 !-right-[5px] !bg-blue-300 hover:!bg-blue-400 !border-none transition-all !rounded-[1px]" 
-          :class="col.isConnectedTarget ? '!opacity-100' : '!opacity-0 group-hover:!opacity-100'"
-        />
-        <Handle 
-          :id="`${col.name}-source`"
-          type="source" 
-          :position="Position.Right" 
-          class="!w-2 !h-2.5 !-right-[5px] !bg-blue-300 hover:!bg-blue-400 !border-none transition-all !rounded-[1px]" 
-          :class="col.isConnectedSource ? '!opacity-100' : '!opacity-0 group-hover:!opacity-100'"
-        />
+        <div
+          v-if="data.connectionMode === 'reference' && data.locateColumns?.includes(col.name)"
+          class="locate-ring"
+        >
+          <svg class="locate-ring__svg" viewBox="0 0 100 20" preserveAspectRatio="none">
+            <rect class="locate-ring__rect" x="1" y="1" width="98" height="18" rx="5" ry="5" pathLength="100" />
+          </svg>
+        </div>
+        <div v-if="data.connectionMode !== 'reference'">
+            <Handle 
+            :id="`${col.name}-target`"
+            type="target" 
+            :position="Position.Right" 
+            class="!w-2 !h-2.5 !-right-[5px] !bg-blue-300 hover:!bg-blue-400 !border-none transition-all !rounded-[1px]" 
+            :class="col.isConnectedTarget ? '!opacity-100' : '!opacity-0 group-hover:!opacity-100'"
+            />
+            <Handle 
+            :id="`${col.name}-source`"
+            type="source" 
+            :position="Position.Right" 
+            class="!w-2 !h-2.5 !-right-[5px] !bg-blue-300 hover:!bg-blue-400 !border-none transition-all !rounded-[1px]" 
+            :class="col.isConnectedSource ? '!opacity-100' : '!opacity-0 group-hover:!opacity-100'"
+            />
+        </div>
         
         <div class="flex items-center gap-1.5 overflow-hidden flex-1">
           <div class="w-4 flex-shrink-0 flex justify-center items-center">
@@ -178,6 +219,55 @@ const getTypeIcon = (type: string) => {
             {{ col.name }}
             <span v-if="col.nullable" class="text-muted-foreground font-normal">?</span>
           </span>
+        </div>
+
+        <div 
+          v-if="data.connectionMode === 'reference' && getReferences(col.name).length" 
+          class="absolute -right-[8px] top-1/2 -translate-y-1/2 z-30"
+          @click.stop
+        >
+           <Popover
+            :open="openReferencePopoverColumn === col.name"
+            @update:open="(nextOpen) => {
+              if (nextOpen) openReferencePopoverColumn = col.name
+              else if (openReferencePopoverColumn === col.name) openReferencePopoverColumn = null
+            }"
+           >
+            <PopoverTrigger as-child>
+               <div 
+                 class="flex items-center justify-center w-4 h-4 bg-primary text-primary-foreground text-[9px] font-bold rounded-full shadow-sm cursor-pointer hover:bg-primary/90 hover:scale-110 transition-all border border-background"
+                 :title="`${getReferences(col.name).length} connections`"
+               >
+                 {{ getReferences(col.name).length }}
+               </div>
+            </PopoverTrigger>
+            <PopoverContent class="w-64 p-0" align="start" side="right">
+              <div class="flex flex-col max-h-[300px] overflow-y-auto" @mouseleave="closeReferencePopover">
+                 <div class="px-3 py-2 bg-muted/30 border-b border-border/40 text-xs font-semibold text-muted-foreground">
+                    {{ col.name }} Connections
+                 </div>
+                 <div 
+                   v-for="ref in getReferences(col.name)" 
+                   :key="ref.edgeId"
+                   class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/50 cursor-pointer border-b border-border/40 last:border-0 transition-colors"
+                   @click="handleReferenceClick(ref)"
+                 >
+                    <div class="shrink-0 text-muted-foreground">
+                       <ArrowRight v-if="ref.type === 'source'" class="w-3.5 h-3.5" />
+                       <ArrowLeft v-else class="w-3.5 h-3.5" />
+                    </div>
+                    <div class="flex flex-col min-w-0 flex-1">
+                      <div class="font-medium truncate text-foreground text-xs">
+                         {{ ref.type === 'source' ? ref.targetTable : ref.sourceTable }}
+                      </div>
+                      <div class="text-[10px] text-muted-foreground truncate">
+                         {{ ref.type === 'source' ? ref.targetColumn : ref.sourceColumn }}
+                      </div>
+                    </div>
+                 </div>
+              </div>
+            </PopoverContent>
+           </Popover>
         </div>
       </div>
 
@@ -223,5 +313,35 @@ const getTypeIcon = (type: string) => {
 <style scoped>
 .vue-flow__handle {
   z-index: 20;
+}
+
+.locate-ring {
+  position: absolute;
+  inset: 2px 2px 2px 2px;
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.locate-ring__svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  filter: drop-shadow(0 0 2px rgba(34, 197, 94, 0.35));
+}
+
+.locate-ring__rect {
+  fill: none;
+  stroke: rgba(34, 197, 94, 0.95);
+  stroke-width: 2.3;
+  stroke-linecap: round;
+  stroke-dasharray: 14 86;
+  animation: locateSnake 2.55s linear infinite;
+}
+
+@keyframes locateSnake {
+  to {
+    stroke-dashoffset: -100;
+  }
 }
 </style>
