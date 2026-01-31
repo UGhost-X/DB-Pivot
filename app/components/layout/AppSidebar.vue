@@ -33,7 +33,8 @@ import {
   FolderOpen,
   User,
   Moon,
-  Sun
+  Sun,
+  Eye
 } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 
@@ -207,6 +208,24 @@ onMounted(() => {
              </template>
           </div>
         </div>
+
+        <!-- Saved Views -->
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button 
+              variant="ghost" 
+              :class="[
+                'w-full justify-start gap-3', 
+                isCollapsed ? 'justify-center px-0' : 'px-3'
+              ]"
+              @click="router.push('/saved-views')"
+            >
+              <Eye class="h-5 w-5" />
+              <span v-if="!isCollapsed">{{ t('nav.savedViews') }}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent v-if="isCollapsed" side="right">{{ t('nav.savedViews') }}</TooltipContent>
+        </Tooltip>
       </TooltipProvider>
     </div>
 

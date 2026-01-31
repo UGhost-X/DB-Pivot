@@ -17,12 +17,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from 'vue-sonner'
 import { 
   Plus, CloudUpload, Maximize, Minus, 
-  Trash2, Link, EyeOff, FileCode,
+  Trash2, Link, EyeOff, FileJson, Copy,
   Loader2, Pencil, Activity,
   History, LayoutGrid, Undo2, Redo2, Hand, MousePointer2, PanelLeftOpen, PanelLeftClose,
   Paintbrush, Settings, Tags
 } from 'lucide-vue-next'
-import { generateSQL } from '@/utils/sqlGenerator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { useDebounceFn } from '@vueuse/core'
@@ -37,6 +36,15 @@ const route = useRoute()
 const router = useRouter()
 const flowWrapper = ref<HTMLElement | null>(null)
 const projectId = computed(() => route.query.projectId ? parseInt(String(route.query.projectId)) : null)
+const isEmbeddedFrame = computed(() => {
+  if (!import.meta.client) return false
+  try {
+    return window.self !== window.top
+  } catch {
+    return true
+  }
+})
+const isPreviewMode = computed(() => String(route.query.preview || '') === '1' || isEmbeddedFrame.value)
 const project = ref<any>(null)
 const canvasId = ref<number | null>(null)
 const isFlowReady = ref(false)
@@ -60,12 +68,27 @@ const connectionMode = ref<'line' | 'reference'>('line')
 // Relationship Features
 const isRelationshipQueryOpen = ref(false)
 const isPatternConfigOpen = ref(false)
+const relationshipQueryConfig = ref({
+  startTable: '',
+  endTable: '',
+  maxDepth: 1,
+  hideUnrelated: false,
+  shortestPath: false,
+})
 
 const historyStack = ref<any[]>([])
 const redoStack = ref<any[]>([])
 const isApplyingHistory = ref(false)
 const canUndo = computed(() => historyStack.value.length > 1)
 const canRedo = computed(() => redoStack.value.length > 0)
+
+watch(isPreviewMode, (isPreview) => {
+  if (!isPreview) return
+  interactionMode.value = 'hand'
+  isCanvasSidebarOpen.value = false
+  isRelationshipQueryOpen.value = false
+  isPatternConfigOpen.value = false
+}, { immediate: true })
 
 // Pattern Configuration
 const patternRules = ref<PatternRule[]>([
@@ -342,6 +365,7 @@ const updateConnectionState = () => {
   const connectedSources = new Set<string>()
   const connectedTargets = new Set<string>()
   const nodeReferences = new Map<string, any[]>()
+  const hasQueryFilter = edges.value.some((e) => (e.data as any)?.queryIncluded === true)
 
   // Initialize map for all table nodes
   nodes.value.forEach(n => {
@@ -351,6 +375,7 @@ const updateConnectionState = () => {
   edges.value.forEach(edge => {
     const isUserHidden = edge.data?.isHidden ?? edge.hidden ?? false
     if (isUserHidden) return
+    if (connectionMode.value === 'reference' && hasQueryFilter && (edge.data as any)?.queryIncluded !== true) return
 
     if (edge.source && edge.sourceHandle) {
       connectedSources.add(`${edge.source}:${edge.sourceHandle}`)
@@ -790,7 +815,9 @@ onPaneReady(() => {
   nextTick(() => resetHistory())
 
   // Add keyboard listener for delete
-  window.addEventListener('keydown', handleKeyDown)
+  if (!isPreviewMode.value) {
+    window.addEventListener('keydown', handleKeyDown)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -798,6 +825,7 @@ onBeforeUnmount(() => {
 })
 
 const handleKeyDown = (e: KeyboardEvent) => {
+  if (isPreviewMode.value) return
   if (['Delete', 'Backspace'].includes(e.key)) {
     // Avoid deleting when typing in inputs
     if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return
@@ -1288,6 +1316,7 @@ const organizeNodes = () => {
 // Auto Save Logic
 const autoSave = useDebounceFn(async () => {
   if (!projectId.value) return
+  if (isPreviewMode.value) return
   if (isDraft.value) return
   if (isRestoringCanvas.value) return
   
@@ -1370,6 +1399,7 @@ watch(patternRules, () => {
 
 // Note: onConnect is a specific event, need to wrap it or watch edges
 const onConnect = (params: Connection) => {
+  if (isPreviewMode.value) return
   if (connectionMode.value === 'reference') return
   addEdges([params])
   scheduleSnapshot()
@@ -1382,6 +1412,7 @@ const onConnect = (params: Connection) => {
 
 // Save Version (Manual Save)
 const saveCanvas = async () => {
+  if (isPreviewMode.value) return false
   if (!projectId.value) {
     toast.error(t('toast.noProjectSelected'))
     return false
@@ -1603,6 +1634,7 @@ const cancelConnection = () => {
 }
 
 const addNoteAtClientPoint = (clientX: number, clientY: number) => {
+  if (isPreviewMode.value) return
   const position = screenToFlowCoordinate({ x: clientX, y: clientY })
   const id = `note-${Date.now()}`
 
@@ -1619,12 +1651,14 @@ const addNoteAtClientPoint = (clientX: number, clientY: number) => {
 }
 
 onEdgeDoubleClick(({ edge }) => {
+  if (isPreviewMode.value) return
   if (edge) {
     edge.selected = true
   }
 })
 
 onEdgeContextMenu(({ event, edge }: any) => {
+  if (isPreviewMode.value) return
   if (!event || !edge) return
   if (edge.id === 'temp-connection-edge') return
   event.preventDefault()
@@ -1645,6 +1679,7 @@ onEdgeContextMenu(({ event, edge }: any) => {
 })
 
 onNodeContextMenu(({ event, node }: any) => {
+  if (isPreviewMode.value) return
   if (!event || !node) return
   event.preventDefault()
 
@@ -1717,6 +1752,7 @@ onNodeContextMenu(({ event, node }: any) => {
 })
 
 onPaneContextMenu((event: any) => {
+  if (isPreviewMode.value) return
   if (!event) return
   event.preventDefault()
 
@@ -1808,6 +1844,7 @@ const updateMouseNodePosition = (event: MouseEvent) => {
 }
 
 const startConnection = (tableName: string, columnName: string, clientPos?: { x: number, y: number }) => {
+  if (isPreviewMode.value) return
   if (connectionMode.value === 'reference') return
   if (connectingState.value.active) {
     cancelConnection()
@@ -1864,6 +1901,7 @@ const startConnection = (tableName: string, columnName: string, clientPos?: { x:
 }
 
 const completeConnection = (targetTable: string, targetColumn: string) => {
+  if (isPreviewMode.value) return
   if (!connectingState.value.sourceTable || !connectingState.value.sourceColumn) return
 
   // Prevent connecting to the same table
@@ -1901,6 +1939,7 @@ const onCollapse = ({ tableName, isCollapsed }: { tableName: string, isCollapsed
 }
 
 const onToggleHidden = ({ tableName, columnName, isHidden }: { tableName: string, columnName: string, isHidden: boolean }) => {
+  if (isPreviewMode.value) return
   const node = findNode(`table-${tableName}`)
   if (node) {
     const col = node.data.columns.find((c: any) => c.name === columnName)
@@ -1911,6 +1950,7 @@ const onToggleHidden = ({ tableName, columnName, isHidden }: { tableName: string
 }
 
 const onColumnContextMenu = ({ event, column, tableName }: any) => {
+  if (isPreviewMode.value) return
   contextMenu.value = {
     visible: true,
     x: event.clientX,
@@ -1931,6 +1971,7 @@ const onColumnContextMenu = ({ event, column, tableName }: any) => {
 }
 
 const onColumnDblClick = ({ event, column, tableName }: any) => {
+  if (isPreviewMode.value) return
   if (connectionMode.value === 'reference') {
     stopLocateColumns()
     return
@@ -1939,6 +1980,7 @@ const onColumnDblClick = ({ event, column, tableName }: any) => {
 }
 
 const onColumnClick = ({ event, column, tableName }: any) => {
+  if (isPreviewMode.value) return
   if (connectingState.value.active) {
     event.stopPropagation()
     completeConnection(tableName, column.name)
@@ -2129,7 +2171,7 @@ const handleGlobalDblClick = (event: MouseEvent) => {
   stopLocateColumns()
 }
 
-const addTableToCanvas = (tableName: string) => {
+const addTableToCanvas = (tableName: string, position?: { x: number, y: number }) => {
   const tableId = `table-${tableName}`
   if (nodes.value.some(n => n.id === tableId)) {
     toast.info(t('toast.info'), { description: t('toast.tableAlreadyOnCanvas') })
@@ -2141,7 +2183,7 @@ const addTableToCanvas = (tableName: string) => {
   const newNode: Node = {
     id: tableId,
     type: 'table',
-    position: { x: Math.random() * 200 + 100, y: Math.random() * 200 + 100 },
+    position: position || { x: Math.random() * 200 + 100, y: Math.random() * 200 + 100 },
     data: { 
       label: tableName,
       columns: columns.map(c => ({
@@ -2165,6 +2207,28 @@ const addTableToCanvas = (tableName: string) => {
   addNodes([newNode])
 }
 
+const onDragOver = (event: DragEvent) => {
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+const onDrop = (event: DragEvent) => {
+  event.preventDefault()
+  if (!event.dataTransfer) return
+
+  try {
+    const data = JSON.parse(event.dataTransfer.getData('application/json'))
+    if (data.type === 'table' && data.tableName) {
+      const position = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+      addTableToCanvas(data.tableName, position)
+    }
+  } catch (e) {
+    console.error('Failed to parse drop data', e)
+  }
+}
+
 const removeTableFromCanvas = (tableName: string) => {
   const tableId = `table-${tableName}`
   const node = nodes.value.find(n => n.id === tableId)
@@ -2186,22 +2250,271 @@ const openSaveDialog = () => {
   isSaveDialogOpen.value = true
 }
 
-// SQL Export
-const isSqlDialogOpen = ref(false)
-const generatedSql = ref('')
+const isJsonExportDialogOpen = ref(false)
+const generatedJson = ref('')
 
-const exportSql = () => {
-  const edges = useVueFlow().edges.value
-  // Use the type from dbConfig if set, otherwise default to pg
-  const type = (dbConfig.value.type as 'pg' | 'mysql2') || 'pg'
-  generatedSql.value = generateSQL(nodes.value, edges, type)
-  isSqlDialogOpen.value = true
+const exportJson = () => {
+  const visibleNodes = nodes.value.filter(n => !n.hidden && n.type === 'table')
+  const visibleEdges = edges.value.filter(e => !e.hidden)
+
+  const exportData = {
+    tables: visibleNodes.map(n => ({
+      tableName: n.data.label,
+      columns: n.data.columns.map((c: any) => ({
+        name: c.name,
+        type: c.type
+      }))
+    })),
+    relationships: visibleEdges.map(e => ({
+      sourceTable: e.sourceNode?.data?.label || e.source,
+      sourceColumn: e.sourceHandle?.replace('-source', ''),
+      targetTable: e.targetNode?.data?.label || e.target,
+      targetColumn: e.targetHandle?.replace('-target', '')
+    }))
+  }
+
+  generatedJson.value = JSON.stringify(exportData, null, 2)
+  isJsonExportDialogOpen.value = true
 }
 
-const copySql = () => {
-  navigator.clipboard.writeText(generatedSql.value)
-  toast.success(t('toast.sqlCopied'))
+const downloadJson = () => {
+  const blob = new Blob([generatedJson.value], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `database-relationships-${new Date().toISOString().split('T')[0]}.json`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  
+  toast.success(t('toast.exportSuccess'))
+  isJsonExportDialogOpen.value = false
 }
+
+const copyJson = async () => {
+  try {
+    await navigator.clipboard.writeText(generatedJson.value)
+    toast.success(t('toast.copySuccess'))
+  } catch (err) {
+    toast.error('Failed to copy')
+  }
+}
+
+const toggleRelationshipQuery = () => {
+  if (isRelationshipQueryOpen.value) {
+    isRelationshipQueryOpen.value = false
+  } else {
+    isRelationshipQueryOpen.value = true
+    isPatternConfigOpen.value = false
+  }
+}
+
+const togglePatternConfig = () => {
+  if (isPatternConfigOpen.value) {
+    isPatternConfigOpen.value = false
+  } else {
+    isPatternConfigOpen.value = true
+    isRelationshipQueryOpen.value = false
+  }
+}
+
+const handleApplyQuery = (result: any) => {
+  const { visitedNodeIds, traversedEdgeIds, hideUnrelated } = result
+  const visitedSet = new Set<string>(visitedNodeIds || [])
+  const traversedSet = new Set<string>(traversedEdgeIds || [])
+  const isReferenceMode = connectionMode.value === 'reference'
+
+  // Update nodes
+  setNodes((current) =>
+    current.map((node) => {
+      const isVisited = visitedSet.has(node.id)
+      
+      if (node.type === 'table') {
+        return {
+            ...node,
+            hidden: hideUnrelated ? !isVisited : false,
+            data: {
+                ...node.data,
+                isHighlighted: isVisited,
+                queryIncluded: isVisited,
+            }
+        }
+      }
+      return node
+    })
+  )
+
+  // Update edges
+  setEdges((current) =>
+    current.map((edge) => {
+      const isTraversed = traversedSet.has(edge.id)
+      const userHidden = (edge.data as any)?.isHidden ?? false
+      // If hiding unrelated, hide edges that are not traversed
+      // Or maybe we should just hide edges connected to hidden nodes?
+      // But let's follow the traversed logic strictly.
+      
+      return {
+        ...edge,
+        hidden: isReferenceMode ? true : (userHidden ? true : (hideUnrelated ? !isTraversed : false)),
+        data: {
+          ...(edge.data || {}),
+          queryIncluded: isTraversed,
+        },
+        style: isTraversed ? { ...edge.style, stroke: 'hsl(var(--primary))', strokeWidth: 3 } : { ...edge.style, stroke: undefined, strokeWidth: 1 },
+        animated: isTraversed
+      }
+    })
+  )
+
+  if (isReferenceMode) {
+    if (traversedEdgeIds?.length) {
+      clearLocateColumns()
+      const targets: Array<{ nodeId: string; columnName: string }> = []
+      edges.value.forEach((e) => {
+        if (!traversedSet.has(e.id)) return
+        if (e.source && e.sourceHandle) {
+          targets.push({ nodeId: e.source, columnName: String(e.sourceHandle).replace(/-source$/, '') })
+        }
+        if (e.target && e.targetHandle) {
+          targets.push({ nodeId: e.target, columnName: String(e.targetHandle).replace(/-target$/, '') })
+        }
+      })
+      if (targets.length > 0) {
+        startLocateColumns(targets)
+      }
+    } else {
+      stopLocateColumns()
+    }
+  }
+}
+
+const handleResetQuery = () => {
+    setNodes((current) => 
+        current.map(node => ({
+            ...node,
+            hidden: false,
+            data: {
+                ...node.data,
+                isHighlighted: false,
+                queryIncluded: undefined,
+            }
+        }))
+    )
+    
+    // Reset edges to default
+    setEdges((current) =>
+      current.map((edge) => {
+        const currentStyle = (edge.style || {}) as any
+        const { stroke, strokeWidth, ...cleanStyle } = currentStyle
+        
+        return {
+          ...edge,
+          hidden: ((edge.data as any)?.isHidden ?? false) === true,
+          animated: false,
+          data: {
+            ...(edge.data || {}),
+            queryIncluded: undefined,
+          },
+          style: cleanStyle
+        }
+      })
+    )
+    applyEdgeDefaults()
+    stopLocateColumns()
+}
+
+const loadSavedView = async (viewId: string) => {
+  if (!import.meta.client) return
+  try {
+    const { success, data: view, error } = await $fetch(`/api/saved-views/${viewId}`)
+
+    if (success && view && view.result) {
+      // Wait for tables to be loaded if project is loading
+      let attempts = 0
+      while (Object.keys(tables.value).length === 0 && (isLoadingProject.value || isConnecting.value) && attempts < 20) {
+        await new Promise(r => setTimeout(r, 200))
+        attempts++
+      }
+
+      // Add missing tables
+      const { visitedNodeIds } = view.result
+      const existingNodeIds = new Set(nodes.value.map(n => n.id))
+      const nodesToAdd: Node[] = []
+
+      visitedNodeIds.forEach((nodeId: string) => {
+         if (!existingNodeIds.has(nodeId) && nodeId.startsWith('table-')) {
+             const tableName = nodeId.replace('table-', '')
+             const columns = tables.value[tableName]
+             if (columns) {
+                 const newNode: Node = {
+                    id: nodeId,
+                    type: 'table',
+                    position: { x: Math.random() * 800, y: Math.random() * 600 },
+                    data: { 
+                      label: tableName,
+                      columns: columns.map((c: any) => ({
+                        name: c.name,
+                        type: c.type,
+                        isPrimaryKey: c.isPrimaryKey,
+                        isForeignKey: c.isForeignKey,
+                        nullable: c.nullable,
+                        isHidden: false
+                      })),
+                      isCollapsed: false,
+                      onContextMenu: onColumnContextMenu,
+                      onDblClick: onColumnDblClick,
+                      onClick: onColumnClick,
+                      onCollapse: onCollapse,
+                      onToggleHidden: onToggleHidden,
+                      onHover: onColumnHover,
+                      onReferenceClick: onReferenceClick
+                    }
+                 }
+                 nodesToAdd.push(newNode)
+             }
+         }
+      })
+      
+      if (nodesToAdd.length > 0) {
+          addNodes(nodesToAdd)
+          await nextTick()
+          // Optional: Auto layout could be nice here, but maybe too aggressive
+      }
+
+      handleApplyQuery({
+        ...view.result,
+        hideUnrelated: view.config.hideUnrelated
+      })
+      if (!isPreviewMode.value) {
+        isRelationshipQueryOpen.value = true
+        isPatternConfigOpen.value = false
+      }
+      if (!isPreviewMode.value) {
+        toast.success(`已加载视图: ${view.name}`)
+      }
+    } else {
+      console.error('Failed to load view', error)
+      toast.error('加载视图失败')
+    }
+  } catch (e) {
+    console.error('Failed to load view', e)
+  }
+}
+
+watch(() => route.query.viewId, (newId) => {
+  if (newId && isFlowReady.value) {
+    loadSavedView(String(newId))
+  }
+}, { immediate: true })
+
+watch(isFlowReady, (ready) => {
+  if (ready && route.query.viewId) {
+    setTimeout(() => {
+      loadSavedView(String(route.query.viewId))
+    }, 500)
+  }
+})
 
 const onBeforeUnload = (event: BeforeUnloadEvent) => {
   if (isDraft.value && isDraftDirty.value) {
@@ -2213,8 +2526,10 @@ const onBeforeUnload = (event: BeforeUnloadEvent) => {
 
 onMounted(async () => {
   if (import.meta.client) {
-    window.addEventListener('beforeunload', onBeforeUnload)
-    window.addEventListener('dblclick', handleGlobalDblClick, true)
+    if (!isPreviewMode.value) {
+      window.addEventListener('beforeunload', onBeforeUnload)
+      window.addEventListener('dblclick', handleGlobalDblClick, true)
+    }
   }
 })
 
@@ -2229,13 +2544,15 @@ onBeforeUnmount(() => {
 <template>
   <div class="flex h-screen w-full bg-background text-foreground overflow-hidden">
     <!-- Column 1: App Sidebar (Navigation & User) -->
-    <AppSidebar 
+    <AppSidebar
+      v-if="!isPreviewMode"
       v-model:isCollapsed="isAppSidebarCollapsed"
       @open-settings="openSettingsDialog"
     />
 
     <!-- Column 2: Canvas Sidebar (Connections & Tables) -->
     <CanvasSidebar
+        v-if="!isPreviewMode"
         :isOpen="isCanvasSidebarOpen"
         :savedConnections="savedConnections"
         :connectionStatuses="connectionStatuses"
@@ -2245,18 +2562,25 @@ onBeforeUnmount(() => {
         :isTableOnCanvas="isTableOnCanvas"
         :addedTables="addedTableNames"
         :tablesData="tables"
+        :isRelationshipQueryOpen="isRelationshipQueryOpen"
+        :isPatternConfigOpen="isPatternConfigOpen"
         @close="isCanvasSidebarOpen = false"
         @add-connection="openAddConnectionDialog"
         @select-connection="selectConnection"
         @connection-context-menu="onConnectionContextMenu"
         @add-table="addTableToCanvas"
         @remove-table="removeTableFromCanvas"
-        @open-relationship-query="isRelationshipQueryOpen = true"
-        @open-pattern-config="isPatternConfigOpen = true"
+        @open-relationship-query="toggleRelationshipQuery"
+        @open-pattern-config="togglePatternConfig"
       />
 
     <!-- Column 3: Main Canvas Area -->
-    <div ref="flowWrapper" class="flex-1 h-full relative overflow-hidden bg-background">
+    <div 
+      ref="flowWrapper" 
+      class="flex-1 h-full relative overflow-hidden bg-background"
+      @dragover="onDragOver"
+      @drop="onDrop"
+    >
       <ContextMenu 
         :visible="contextMenu.visible" 
         :x="contextMenu.x" 
@@ -2291,20 +2615,24 @@ onBeforeUnmount(() => {
         </DialogContent>
       </Dialog>
 
-      <Dialog :open="isSqlDialogOpen" @update:open="isSqlDialogOpen = $event">
+      <!-- JSON Export Dialog -->
+      <Dialog :open="isJsonExportDialogOpen" @update:open="isJsonExportDialogOpen = $event">
         <DialogContent class="sm:max-w-[600px] max-h-[80vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>{{ t('sqlExport.title') }}</DialogTitle>
-            <DialogDescription>
-              {{ t('sqlExport.description') }}
-            </DialogDescription>
+            <DialogTitle>{{ t('canvas.exportJson') }}</DialogTitle>
           </DialogHeader>
           <div class="flex-1 overflow-auto py-4">
-            <pre class="bg-muted p-4 rounded-md text-xs font-mono whitespace-pre-wrap text-foreground">{{ generatedSql }}</pre>
+            <pre class="bg-muted p-4 rounded-md text-xs font-mono whitespace-pre-wrap text-foreground">{{ generatedJson }}</pre>
           </div>
-          <DialogFooter>
-            <Button variant="outline" @click="isSqlDialogOpen = false">{{ t('common.close') }}</Button>
-            <Button @click="copySql">{{ t('common.copy') }}</Button>
+          <DialogFooter class="flex justify-end gap-2">
+            <Button variant="outline" @click="copyJson">
+              <Copy class="w-4 h-4 mr-2" />
+              {{ t('common.copy') }}
+            </Button>
+            <Button @click="downloadJson">
+              <CloudUpload class="w-4 h-4 mr-2" />
+              {{ t('common.download') }}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2501,12 +2829,12 @@ onBeforeUnmount(() => {
         :default-viewport="{ zoom: 0.8 }"
         :min-zoom="0.2"
         :max-zoom="4"
-        :nodes-draggable="true"
-        :nodes-connectable="interactionMode === 'pointer' && connectionMode === 'line'"
-        :elements-selectable="true"
-        :pan-on-drag="interactionMode === 'hand'"
-        :selection-on-drag="interactionMode === 'pointer'"
-        :selection-key-code="interactionMode === 'pointer' ? true : 'Shift'"
+        :nodes-draggable="!isPreviewMode"
+        :nodes-connectable="!isPreviewMode && interactionMode === 'pointer' && connectionMode === 'line'"
+        :elements-selectable="!isPreviewMode"
+        :pan-on-drag="isPreviewMode ? true : interactionMode === 'hand'"
+        :selection-on-drag="!isPreviewMode && interactionMode === 'pointer'"
+        :selection-key-code="isPreviewMode ? false : (interactionMode === 'pointer' ? true : 'Shift')"
         @connect="onConnect"
       >
         <!-- Loading Overlay -->
@@ -2519,7 +2847,7 @@ onBeforeUnmount(() => {
         <Background pattern-color="hsl(var(--border))" :gap="20" :size="1" />
         
         <!-- Canvas Toolbar (Left) -->
-        <div class="absolute left-6 top-1/2 -translate-y-1/2 z-50 flex flex-col items-center gap-3 p-1 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl">
+        <div v-if="!isPreviewMode" class="absolute left-6 top-1/2 -translate-y-1/2 z-50 flex flex-col items-center gap-3 p-1 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl">
           <div class="flex flex-col items-center gap-2">
             <div class="flex flex-col items-center gap-2 p-1 rounded-full bg-muted/40">
               <Button 
@@ -2572,8 +2900,8 @@ onBeforeUnmount(() => {
             <Button @click="organizeNodes" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.organize')">
               <LayoutGrid class="h-4 w-4" />
             </Button>
-            <Button @click="exportSql" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.exportSql')">
-              <FileCode class="h-4 w-4" />
+            <Button @click="exportJson" variant="ghost" size="icon" class="rounded-full h-10 w-10 hover:bg-muted" :title="t('canvas.exportJson')">
+              <FileJson class="h-4 w-4" />
             </Button>
           </div>
 
@@ -2590,28 +2918,19 @@ onBeforeUnmount(() => {
           </Button>
         </div>
 
-        <div class="absolute left-10 bottom-6 z-50 flex items-center gap-2 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl p-1">
+        <div v-if="!isPreviewMode" class="absolute left-10 bottom-6 z-50 flex items-center gap-2 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl p-1">
           <Button @click="undo" variant="ghost" size="icon" class="rounded-full h-9 w-9 hover:bg-muted" :title="t('canvas.undo')" :disabled="!canUndo">
             <Undo2 class="h-4 w-4" />
           </Button>
           <Button @click="redo" variant="ghost" size="icon" class="rounded-full h-9 w-9 hover:bg-muted" :title="t('canvas.redo')" :disabled="!canRedo">
             <Redo2 class="h-4 w-4" />
           </Button>
-          <div class="w-px h-4 bg-border mx-1"></div>
-          <Button 
-            @click="isPatternConfigOpen = !isPatternConfigOpen" 
-            variant="ghost" 
-            size="icon"
-            class="rounded-full h-9 w-9 hover:bg-muted"
-            :class="{ 'text-primary': isPatternConfigOpen }"
-            title="关系管理"
-          >
-            <Settings class="h-4 w-4" />
-          </Button>
+
+
         </div>
 
         <!-- Version + Save + Zoom (Top Right) -->
-        <div class="absolute top-6 right-6 z-50 flex items-center gap-2">
+        <div v-if="!isPreviewMode" class="absolute top-6 right-6 z-50 flex items-center gap-2">
           <Button @click="openHistoryDialog" variant="outline" class="h-10 px-3 bg-background/90 backdrop-blur-md border-border shadow-lg hover:bg-muted" :title="t('canvas.versions')">
             <History class="h-4 w-4 mr-2" />
             {{ t('canvas.versions') }}
@@ -2623,7 +2942,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Zoom Controls (Bottom Right) -->
-        <div class="absolute bottom-6 right-6 z-50 flex items-center gap-2">
+        <div v-if="!isPreviewMode" class="absolute bottom-6 right-6 z-50 flex items-center gap-2">
           <div class="flex items-center shadow-lg rounded-md overflow-hidden border border-border bg-background/90 backdrop-blur">
             <Button 
               @click="fitView" 
@@ -2659,17 +2978,27 @@ onBeforeUnmount(() => {
         </div>
       </VueFlow>
 
-      <!-- Relationship Query Panel -->
-      <RelationshipQueryPanel 
-        v-if="isRelationshipQueryOpen"
-        :tablesData="tables"
-        @close="isRelationshipQueryOpen = false"
-      />
+      <!-- Relationship Query Panel (Right Sidebar) -->
+      <Transition name="slide-right">
+        <div v-if="!isPreviewMode && isRelationshipQueryOpen" class="absolute top-0 right-0 h-full z-50 shadow-2xl">
+          <RelationshipQueryPanel 
+            class="h-full border-l border-border bg-background w-[350px]"
+            :tablesData="tables"
+            :nodes="nodes"
+            :edges="edges"
+            :initialConfig="relationshipQueryConfig"
+            @update:config="relationshipQueryConfig = $event"
+            @apply-query="handleApplyQuery"
+            @reset-query="handleResetQuery"
+            @close="isRelationshipQueryOpen = false"
+          />
+        </div>
+      </Transition>
     </div>
 
     <!-- Right Sidebar (Pattern Configuration) -->
     <Transition name="slide-right">
-      <div v-if="isPatternConfigOpen" class="absolute top-0 right-0 h-full z-40 shadow-2xl">
+      <div v-if="!isPreviewMode && isPatternConfigOpen" class="absolute top-0 right-0 h-full z-40 shadow-2xl">
         <PatternConfigPanel 
           class="h-full border-l border-border bg-background"
           :rules="patternRules"

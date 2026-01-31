@@ -25,6 +25,7 @@ const props = defineProps<{
     isView?: boolean
     color?: string
     isCollapsed?: boolean
+    isHighlighted?: boolean
     onContextMenu?: (payload: { event: MouseEvent, column: any, tableName: string }) => void
     onDblClick?: (payload: { event: MouseEvent, column: any, tableName: string }) => void
     onClick?: (payload: { event: MouseEvent, column: any, tableName: string }) => void

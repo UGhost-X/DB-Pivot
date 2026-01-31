@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useI18n } from '@/composables/useI18n'
+import { useRouter, useRoute } from 'vue-router'
 import { 
   Search, 
   PlusCircle, 
@@ -40,7 +41,8 @@ const props = defineProps<{
   isTableOnCanvas: (tableName: string) => boolean
   isOpen: boolean
   addedTables?: string[]
-  tablesData?: Record<string, any[]>
+  isRelationshipQueryOpen: boolean
+  isPatternConfigOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -54,8 +56,17 @@ const emit = defineEmits<{
   (e: 'open-pattern-config'): void
 }>()
 
+const onDragStart = (event: DragEvent, tableName: string) => {
+  if (event.dataTransfer) {
+    event.dataTransfer.setData('application/json', JSON.stringify({ type: 'table', tableName }))
+    event.dataTransfer.effectAllowed = 'copy'
+  }
+}
+
 const tableSearch = ref('')
 const { t } = useI18n()
+const router = useRouter()
+const route = useRoute()
 const expandedConnections = ref<Record<number, boolean>>({})
 const expandedNodes = ref<Record<string, boolean>>({})
 
@@ -340,6 +351,8 @@ const getAvailableTables = (tables: string[]) => {
                                     v-for="tableName in getAvailableTables(schema.tables)"
                                     :key="`${schemaName}:${tableName}`"
                                     class="group flex flex-col transition-colors rounded-md text-muted-foreground"
+                                    draggable="true"
+                                    @dragstart="onDragStart($event, tableName)"
                                   >
                                     <div 
                                       class="py-1.5 px-2 flex items-center justify-between cursor-pointer w-full hover:bg-muted/50 rounded-md transition-colors"
@@ -385,6 +398,34 @@ const getAvailableTables = (tables: string[]) => {
                   </Transition>
                 </div>
               </div>
+            </AccordionContent>
+          </AccordionItem>
+
+           <!-- Tools -->
+           <AccordionItem value="tools" class="border-b-0">
+            <AccordionTrigger class="px-4 py-2 hover:no-underline hover:bg-muted/50 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+              <span>{{ t('sidebar.tools') }}</span>
+            </AccordionTrigger>
+            <AccordionContent class="px-2 pb-2 space-y-1">
+              <Button 
+                variant="ghost" 
+                class="w-full justify-start gap-2 h-9 px-2 font-normal text-muted-foreground hover:text-foreground"
+                :class="{ 'bg-accent text-foreground': isRelationshipQueryOpen }"
+                @click="emit('open-relationship-query')"
+              >
+                <Search class="h-4 w-4" />
+                <span>{{ t('sidebar.relationshipQuery') }}</span>
+              </Button>
+              <Button 
+                variant="ghost" 
+                class="w-full justify-start gap-2 h-9 px-2 font-normal text-muted-foreground hover:text-foreground"
+                :class="{ 'bg-accent text-foreground': isPatternConfigOpen }"
+                @click="emit('open-pattern-config')"
+              >
+                <Settings class="h-4 w-4" />
+                <span>{{ t('sidebar.patternConfig') }}</span>
+              </Button>
+
             </AccordionContent>
           </AccordionItem>
         </Accordion>
