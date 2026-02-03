@@ -42,6 +42,8 @@ export default defineEventHandler(async (event) => {
         statusMessage: 'Connection not found'
       })
     }
+
+    const metadataTimeoutMs = connection.type === 'mysql2' ? 60000 : 30000
     
     // Get table metadata from the connection
     const metadataResponse = await $fetch<{ success: boolean; data?: any; error?: string }>('/api/metadata', {
@@ -52,7 +54,8 @@ export default defineEventHandler(async (event) => {
         port: connection.port,
         user: connection.user,
         password: connection.password,
-        database: connection.database
+        database: connection.database,
+        timeoutMs: metadataTimeoutMs
       }
     })
     

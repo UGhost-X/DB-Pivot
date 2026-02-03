@@ -149,6 +149,7 @@ interface QueryResult {
   totalTables: number
   visitedNodeIds: string[]
   traversedEdgeIds: string[]
+  traversedEdgeKeys?: string[]
 }
 
 const props = defineProps<{
@@ -229,6 +230,17 @@ const executeQuery = () => {
   }
 
   const isUserHiddenEdge = (e: Edge) => ((e.data as any)?.isHidden ?? false) === true
+  const normalizeHandle = (handle: unknown) => String(handle || '').replace(/-(source|target)$/, '')
+  const getEdgeKey = (edge: Edge) => {
+    const aNode = String((edge as any).source || '')
+    const bNode = String((edge as any).target || '')
+    const aHandle = normalizeHandle((edge as any).sourceHandle)
+    const bHandle = normalizeHandle((edge as any).targetHandle)
+    const a = aHandle ? `${aNode}:${aHandle}` : aNode
+    const b = bHandle ? `${bNode}:${bHandle}` : bNode
+    return [a, b].sort().join('|')
+  }
+  const edgeById = new Map<string, Edge>(props.edges.map((e) => [String(e.id), e]))
 
   const adjacency = new Map<string, Array<{ neighborId: string; edgeId: string }>>()
   const addAdj = (from: string, to: string, edgeId: string) => {
@@ -388,7 +400,15 @@ const executeQuery = () => {
     totalRelations: traversedEdges.size,
     totalTables: visited.size,
     visitedNodeIds: Array.from(visited),
-    traversedEdgeIds: Array.from(traversedEdges)
+    traversedEdgeIds: Array.from(traversedEdges),
+    traversedEdgeKeys: Array.from(
+      new Set(
+        Array.from(traversedEdges)
+          .map((id) => edgeById.get(String(id)))
+          .filter(Boolean)
+          .map((e) => getEdgeKey(e as Edge))
+      )
+    ),
   }
 
   emit('applyQuery', {
@@ -414,6 +434,18 @@ const saveView = async () => {
   if (!viewName.value || !queryResult.value) return
 
   try {
+    const layout: Record<string, { x: number, y: number }> = {}
+    
+    // Capture layout for visited nodes
+    if (queryResult.value?.visitedNodeIds) {
+      const visitedSet = new Set(queryResult.value.visitedNodeIds)
+      props.nodes.forEach(node => {
+        if (visitedSet.has(node.id)) {
+          layout[node.id] = { x: node.position.x, y: node.position.y }
+        }
+      })
+    }
+
     const { success, error } = await $fetch('/api/saved-views', {
       method: 'POST',
       body: {
@@ -421,7 +453,9 @@ const saveView = async () => {
         config: queryConfig.value,
         result: {
           visitedNodeIds: queryResult.value.visitedNodeIds,
-          traversedEdgeIds: queryResult.value.traversedEdgeIds
+          traversedEdgeIds: queryResult.value.traversedEdgeIds,
+          traversedEdgeKeys: queryResult.value.traversedEdgeKeys,
+          layout
         },
         projectId: route.query.projectId
       }

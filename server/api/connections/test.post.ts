@@ -1,9 +1,24 @@
 import knex from 'knex'
 import prisma from '../../utils/prisma'
 
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
+}
+
 export default defineEventHandler(async (event) => {
   const body = await readBody(event)
-  const { id, config } = body
+  const { id, config, timeoutMs: timeoutMsRaw } = body
+  const timeoutMs = Number(timeoutMsRaw) > 0 ? Number(timeoutMsRaw) : 8000
   
   let dbConfig = config
   
@@ -41,21 +56,25 @@ export default defineEventHandler(async (event) => {
   }
   
   const { type, host, port, user: dbUser, password, database } = dbConfig
+  const defaultPort = type === 'pg' ? 5432 : type === 'mysql' || type === 'mysql2' ? 3306 : 5432
+  const parsedPort = typeof port === 'number' ? port : Number.parseInt(String(port ?? ''), 10)
   
   const client = knex({
     client: type,
     connection: {
       host,
-      port: parseInt(port) || 5432,
+      port: Number.isFinite(parsedPort) ? parsedPort : defaultPort,
       user: dbUser,
       password,
       database,
+      ...(type === 'pg' ? { connectionTimeoutMillis: timeoutMs } : {}),
+      ...(type === 'mysql' || type === 'mysql2' ? { connectTimeout: timeoutMs } : {}),
     },
-    acquireConnectionTimeout: 5000,
+    acquireConnectionTimeout: timeoutMs,
   })
   
   try {
-     await client.raw('SELECT 1')
+     await withTimeout(client.raw('SELECT 1'), timeoutMs)
      return { success: true }
   } catch (error: any) {
      return { success: false, error: error.message }

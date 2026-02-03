@@ -34,9 +34,13 @@ import {
   User,
   Moon,
   Sun,
-  Eye
+  Eye,
+  Trash2,
+  Layout
 } from 'lucide-vue-next'
-import { useDark, useToggle } from '@vueuse/core'
+import { useDark, useToggle, onClickOutside } from '@vueuse/core'
+import ViewPreviewDialog from '@/components/ViewPreviewDialog.vue'
+import { toast } from 'vue-sonner'
 
 const props = defineProps<{
   isCollapsed: boolean
@@ -62,9 +66,127 @@ const isProjectsMenuOpen = ref(false)
 const isLoadingProjects = ref(false)
 const projects = ref<any[]>([])
 const projectCount = computed(() => projects.value.length)
+const expandedSavedViews = ref<Record<number, boolean>>({})
+const projectSavedViews = ref<Record<number, any[]>>({})
+const loadingSavedViews = ref<Record<number, boolean>>({})
+
+// Context Menu State
+const contextMenu = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  view: null as any,
+  projectId: null as number | null
+})
+const contextMenuRef = ref(null)
+
+onClickOutside(contextMenuRef, () => {
+  contextMenu.value.visible = false
+})
+
+const handleContextMenu = (event: MouseEvent, view: any, projectId: number) => {
+  contextMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    view,
+    projectId
+  }
+}
+
+const deleteSavedView = async () => {
+  const { view, projectId } = contextMenu.value
+  if (!view || !projectId) return
+  
+  contextMenu.value.visible = false
+  
+  try {
+    const { success, error } = await $fetch(`/api/saved-views/${view.id}`, {
+      method: 'DELETE'
+    })
+
+    if (success) {
+      // Remove from list
+      if (projectSavedViews.value[projectId]) {
+        projectSavedViews.value[projectId] = projectSavedViews.value[projectId].filter(v => v.id !== view.id)
+      }
+      toast.success('删除成功')
+    } else {
+      throw new Error(error)
+    }
+  } catch (e) {
+    console.error('Failed to delete view', e)
+    toast.error('删除失败')
+  }
+}
+
+const handlePreviewFromContext = () => {
+  const { view, projectId } = contextMenu.value
+  if (view && projectId) {
+    openViewPreview(view, projectId)
+  }
+  contextMenu.value.visible = false
+}
+
+// Preview State
+const isPreviewOpen = ref(false)
+const previewUrl = ref('')
+const previewTitle = ref('')
 
 const handleProjectClick = (id: number) => {
   router.push({ path: '/', query: { projectId: id } })
+}
+
+const toggleSavedViews = async (projectId: number) => {
+  const isExpanded = !expandedSavedViews.value[projectId]
+  expandedSavedViews.value = { ...expandedSavedViews.value, [projectId]: isExpanded }
+  
+  if (isExpanded && !projectSavedViews.value[projectId]) {
+    await fetchSavedViews(projectId)
+  }
+}
+
+const fetchSavedViews = async (projectId: number) => {
+  if (loadingSavedViews.value[projectId]) return
+  loadingSavedViews.value = { ...loadingSavedViews.value, [projectId]: true }
+  
+  try {
+    const { success, data } = await $fetch('/api/saved-views', {
+      params: { projectId }
+    })
+    
+    if (success) {
+      projectSavedViews.value = { ...projectSavedViews.value, [projectId]: data }
+    }
+  } catch (e) {
+    console.error(e)
+    toast.error(t('toast.error'))
+  } finally {
+    loadingSavedViews.value = { ...loadingSavedViews.value, [projectId]: false }
+  }
+}
+
+const refreshSavedViews = async (projectId: number) => {
+  await fetchSavedViews(projectId)
+}
+
+defineExpose({
+  refreshSavedViews,
+})
+
+const openViewPreview = (view: any, projectId: number) => {
+  previewTitle.value = view.name
+  const route = router.resolve({ 
+    path: '/', 
+    query: { 
+      viewId: view.id, 
+      projectId, 
+      preview: '1', 
+      embed: '1' 
+    } 
+  })
+  previewUrl.value = route.href
+  isPreviewOpen.value = true
 }
 
 const toggleCollapse = () => {
@@ -194,38 +316,55 @@ onMounted(() => {
              <div v-if="isLoadingProjects" class="px-2 py-1 text-xs text-muted-foreground">{{ t('projects.loading') }}</div>
              <div v-else-if="projects.length === 0" class="px-2 py-1 text-xs text-muted-foreground">{{ t('projects.empty') }}</div>
              <template v-else>
-               <div
-                 v-for="p in projects"
-                 :key="p.id"
-                 class="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-muted/50 text-sm text-muted-foreground cursor-pointer transition-colors"
-                 @click="handleProjectClick(p.id)"
-               >
-                 <div class="flex items-center gap-2 min-w-0">
-                   <Folder class="h-3.5 w-3.5 shrink-0" />
-                   <span class="truncate">{{ p.name }}</span>
+               <div v-for="p in projects" :key="p.id" class="flex flex-col gap-0.5">
+                 <div
+                   class="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-muted/50 text-sm text-muted-foreground cursor-pointer transition-colors group"
+                   @click="handleProjectClick(p.id)"
+                 >
+                   <div class="flex items-center gap-2 min-w-0">
+                     <Folder class="h-3.5 w-3.5 shrink-0" />
+                     <span class="truncate">{{ p.name }}</span>
+                   </div>
+                 </div>
+                 
+                 <!-- Saved Views Folder -->
+                 <div class="flex flex-col">
+                   <div 
+                      class="flex items-center gap-2 py-1 px-2 ml-4 rounded-md hover:bg-muted/50 text-xs text-muted-foreground cursor-pointer transition-colors"
+                      @click.stop="toggleSavedViews(p.id)"
+                   >
+                      <FolderOpen v-if="expandedSavedViews[p.id]" class="h-3 w-3 shrink-0" />
+                      <Folder v-else class="h-3 w-3 shrink-0" />
+                      <span>{{ t('nav.savedViews') }}</span>
+                   </div>
+
+                   <!-- Saved Views List -->
+                   <div v-if="expandedSavedViews[p.id]" class="ml-8 border-l border-border/40 pl-2 mt-1 space-y-0.5">
+                      <div v-if="loadingSavedViews[p.id]" class="text-[10px] text-muted-foreground py-1 px-2">
+                        {{ t('projects.loading') }}
+                      </div>
+                      <div v-else-if="!projectSavedViews[p.id] || projectSavedViews[p.id].length === 0" class="text-[10px] text-muted-foreground py-1 px-2">
+                        {{ t('projects.empty') }}
+                      </div>
+                      <template v-else>
+                        <div 
+                          v-for="view in projectSavedViews[p.id]" 
+                          :key="view.id"
+                          class="flex items-center gap-2 py-1 px-2 rounded-md hover:bg-muted/50 text-xs text-muted-foreground cursor-pointer transition-colors truncate"
+                          @click.stop="openViewPreview(view, p.id)"
+                          @contextmenu.prevent="handleContextMenu($event, view, p.id)"
+                          :title="view.name"
+                        >
+                          <Layout class="h-3 w-3 shrink-0" />
+                          <span class="truncate">{{ view.name }}</span>
+                        </div>
+                      </template>
+                   </div>
                  </div>
                </div>
              </template>
           </div>
         </div>
-
-        <!-- Saved Views -->
-        <Tooltip>
-          <TooltipTrigger as-child>
-            <Button 
-              variant="ghost" 
-              :class="[
-                'w-full justify-start gap-3', 
-                isCollapsed ? 'justify-center px-0' : 'px-3'
-              ]"
-              @click="router.push('/saved-views')"
-            >
-              <Eye class="h-5 w-5" />
-              <span v-if="!isCollapsed">{{ t('nav.savedViews') }}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent v-if="isCollapsed" side="right">{{ t('nav.savedViews') }}</TooltipContent>
-        </Tooltip>
       </TooltipProvider>
     </div>
 
@@ -296,4 +435,33 @@ onMounted(() => {
        </DropdownMenu>
     </div>
   </div>
+
+  <!-- Context Menu -->
+  <div
+    v-if="contextMenu.visible"
+    ref="contextMenuRef"
+    class="fixed z-50 min-w-[120px] bg-popover text-popover-foreground border border-border shadow-md rounded-md p-1 overflow-hidden"
+    :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+  >
+    <div 
+      class="flex items-center gap-2 px-2 py-1.5 text-xs rounded-sm hover:bg-accent hover:text-accent-foreground cursor-pointer"
+      @click="handlePreviewFromContext"
+    >
+      <Eye class="h-3.5 w-3.5" />
+      <span>预览</span>
+    </div>
+    <div 
+      class="flex items-center gap-2 px-2 py-1.5 text-xs rounded-sm hover:bg-accent hover:text-accent-foreground cursor-pointer text-destructive focus:text-destructive"
+      @click="deleteSavedView"
+    >
+      <Trash2 class="h-3.5 w-3.5" />
+      <span>删除</span>
+    </div>
+  </div>
+
+  <ViewPreviewDialog
+    v-model:open="isPreviewOpen"
+    :url="previewUrl"
+    :title="previewTitle"
+  />
 </template>

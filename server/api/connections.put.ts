@@ -22,8 +22,18 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 403, statusMessage: 'Forbidden' })
   }
 
+  const nextType = type || existing.type
+  const defaultPort = nextType === 'pg' ? 5432 : nextType === 'mysql' || nextType === 'mysql2' ? 3306 : 5432
+  const parsedPort = typeof port === 'number' ? port : Number.parseInt(String(port ?? ''), 10)
+  const nextPort = Number.isFinite(parsedPort) ? parsedPort : existing.port || defaultPort
+
   const updateData: any = {
-    name, type, host, port: parseInt(port), user: dbUser, database
+    name,
+    type: nextType,
+    host,
+    port: nextPort,
+    user: dbUser,
+    database
   }
   
   // Only update password if provided

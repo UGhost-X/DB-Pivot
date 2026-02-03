@@ -16,9 +16,21 @@ export default defineEventHandler(async (event) => {
 
     const connections = await prisma.connection.findMany({
       where,
-      orderBy: { updatedAt: 'desc' }
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        _count: {
+          select: { canvases: true }
+        }
+      }
     })
-    return { success: true, data: connections }
+    
+    const mappedConnections = connections.map(conn => ({
+      ...conn,
+      hasCanvas: conn._count.canvases > 0,
+      _count: undefined
+    }))
+
+    return { success: true, data: mappedConnections }
   } catch (error) {
     return { success: false, error: String(error) }
   }

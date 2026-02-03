@@ -12,13 +12,16 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  const defaultPort = type === 'pg' ? 5432 : type === 'mysql' || type === 'mysql2' ? 3306 : 5432
+  const parsedPort = typeof port === 'number' ? port : Number.parseInt(String(port ?? ''), 10)
+
   try {
     const connection = await prisma.connection.create({
       data: {
         name: name || `${database}@${host}`,
         type,
         host,
-        port: parseInt(port) || 5432,
+        port: Number.isFinite(parsedPort) ? parsedPort : defaultPort,
         user: dbUser,
         password,
         database,

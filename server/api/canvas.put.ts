@@ -3,7 +3,7 @@ import prisma from '../utils/prisma'
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
   const body = await readBody(event)
-  const { id, projectId, data } = body
+  const { id, projectId, connectionId, data } = body
 
   if (!data) {
     throw createError({ statusCode: 400, statusMessage: 'Data required' })
@@ -11,8 +11,16 @@ export default defineEventHandler(async (event) => {
 
   let canvasId = id
 
-  if (!canvasId && projectId) {
-      // Find canvas by project
+  if (!canvasId && connectionId) {
+      // Find canvas by connection
+      const canvas = await prisma.canvas.findFirst({
+          where: { connectionId: parseInt(connectionId) }
+      })
+      if (canvas) canvasId = canvas.id
+  }
+
+  if (!canvasId && projectId && !connectionId) {
+      // Find canvas by project (legacy or fallback)
       const canvas = await prisma.canvas.findFirst({
           where: { projectId: parseInt(projectId) }
       })
@@ -29,7 +37,8 @@ export default defineEventHandler(async (event) => {
             name: 'Untitled',
             data,
             ownerId: user.id,
-            projectId: projectId ? parseInt(projectId) : undefined
+            projectId: projectId ? parseInt(projectId) : undefined,
+            connectionId: connectionId ? parseInt(connectionId) : undefined
           }
        })
        return { success: true, data: canvas }

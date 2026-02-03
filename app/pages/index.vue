@@ -11,6 +11,7 @@ import AppSidebar from '@/components/layout/AppSidebar.vue'
 import CanvasSidebar from '@/components/layout/CanvasSidebar.vue'
 import RelationshipQueryPanel from '@/components/RelationshipQueryPanel.vue'
 import PatternConfigPanel, { type PatternRule, type DetectionResult } from '@/components/PatternConfigPanel.vue'
+import AIRelationshipPanel from '@/components/AIRelationshipPanel.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -20,7 +21,7 @@ import {
   Trash2, Link, EyeOff, FileJson, Copy,
   Loader2, Pencil, Activity,
   History, LayoutGrid, Undo2, Redo2, Hand, MousePointer2, PanelLeftOpen, PanelLeftClose,
-  Paintbrush, Settings, Tags
+  Paintbrush, Settings, Tags, BrainCircuit
 } from 'lucide-vue-next'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
@@ -48,6 +49,7 @@ const isPreviewMode = computed(() => String(route.query.preview || '') === '1' |
 const project = ref<any>(null)
 const canvasId = ref<number | null>(null)
 const isFlowReady = ref(false)
+const isCanvasLoaded = ref(false)
 const pendingCanvasData = ref<any>(null)
 const isAutoSaving = ref(false)
 const lastSaved = ref<Date | null>(null)
@@ -58,16 +60,23 @@ const pendingNavigation = ref<any>(null)
 const allowNavigationOnce = ref(false)
 const isRestoringCanvas = ref(false)
 const isLoadingProject = ref(false)
+const editorStateBackup = ref<any>(null)
+const isPreviewViewLoading = ref(false)
+const isLoadingSavedView = ref(false)
+const loadingSavedViewId = ref<string | null>(null)
 
 // Layout State
 const isAppSidebarCollapsed = ref(false)
+const appSidebarRef = ref<any>(null)
 const isCanvasSidebarOpen = ref(true)
+const sidebarWidth = ref(288)
 const interactionMode = ref<'pointer' | 'hand'>('hand')
 const connectionMode = ref<'line' | 'reference'>('line')
 
 // Relationship Features
 const isRelationshipQueryOpen = ref(false)
 const isPatternConfigOpen = ref(false)
+const isAIRelationshipPanelOpen = ref(false)
 const relationshipQueryConfig = ref({
   startTable: '',
   endTable: '',
@@ -82,12 +91,47 @@ const isApplyingHistory = ref(false)
 const canUndo = computed(() => historyStack.value.length > 1)
 const canRedo = computed(() => redoStack.value.length > 0)
 
+const handleViewSaved = async () => {
+  if (!projectId.value) return
+  await appSidebarRef.value?.refreshSavedViews(projectId.value)
+}
+
+const toggleAIRelationshipPanel = () => {
+  isAIRelationshipPanelOpen.value = !isAIRelationshipPanelOpen.value
+  if (isAIRelationshipPanelOpen.value) {
+    isRelationshipQueryOpen.value = false
+    isPatternConfigOpen.value = false
+  }
+}
+
+const handleAddDetectedEdges = (newEdges: any[]) => {
+  addEdges(newEdges)
+  toast.success(`已添加 ${newEdges.length} 个关系`)
+}
+
 watch(isPreviewMode, (isPreview) => {
-  if (!isPreview) return
-  interactionMode.value = 'hand'
-  isCanvasSidebarOpen.value = false
-  isRelationshipQueryOpen.value = false
-  isPatternConfigOpen.value = false
+  if (!import.meta.client) return
+  
+  if (isPreview) {
+    // Entering preview mode: backup editor state and clear canvas
+    editorStateBackup.value = toObject()
+    setNodes([])
+    setEdges([])
+    isFlowReady.value = false // Reset flow ready state for new instance
+    
+    interactionMode.value = 'hand'
+    isCanvasSidebarOpen.value = false
+    isRelationshipQueryOpen.value = false
+    isPatternConfigOpen.value = false
+    isAIRelationshipPanelOpen.value = false
+  } else {
+      // Leaving preview mode: restore editor state if available
+      if (editorStateBackup.value) {
+        fromObject(editorStateBackup.value)
+        editorStateBackup.value = null
+        isFlowReady.value = false // Reset to trigger re-initialization logic if needed
+      }
+    }
 }, { immediate: true })
 
 // Pattern Configuration
@@ -880,7 +924,49 @@ const dbConfig = ref({
   database: 'postgres'
 })
 
-const isConnecting = ref(false)
+const isConnectingDb = ref(false)
+const currentConnectionStatus = computed(() => {
+  if (!currentConnectionId.value) return 'idle'
+  return connectionStatuses.value[currentConnectionId.value] || 'idle'
+})
+const isSavingConnection = ref(false)
+const METADATA_TIMEOUT_DEFAULT_MS = 60000
+const METADATA_TIMEOUT_MYSQL_MS = 90000
+const getMetadataTimeoutMs = () =>
+  dbConfig.value.type === 'mysql2' ? METADATA_TIMEOUT_MYSQL_MS : METADATA_TIMEOUT_DEFAULT_MS
+const CONNECTION_TEST_TIMEOUT_MS = 30000
+
+const isAbortError = (error: any) => {
+  return error?.name === 'AbortError' || String(error?.message || error).toLowerCase().includes('aborted')
+}
+
+let metadataAbortController: AbortController | null = null
+let metadataAbortTimeoutId: ReturnType<typeof setTimeout> | null = null
+let metadataAbortReason: 'timeout' | 'switch' | null = null
+
+const abortMetadataRequest = (reason: 'timeout' | 'switch') => {
+  metadataAbortReason = reason
+  if (metadataAbortTimeoutId) clearTimeout(metadataAbortTimeoutId)
+  metadataAbortTimeoutId = null
+  metadataAbortController?.abort()
+  metadataAbortController = null
+  if (reason === 'switch') {
+    isConnectingDb.value = false
+  }
+}
+
+let saveAbortController: AbortController | null = null
+let saveAbortTimeoutId: ReturnType<typeof setTimeout> | null = null
+let saveAbortReason: 'timeout' | null = null
+
+const abortSaveRequest = (reason: 'timeout') => {
+  saveAbortReason = reason
+  if (saveAbortTimeoutId) clearTimeout(saveAbortTimeoutId)
+  saveAbortTimeoutId = null
+  saveAbortController?.abort()
+  saveAbortController = null
+}
+
 const tables = ref<Record<string, any[]>>({})
 const availableTables = computed(() => Object.keys(tables.value))
 const metadataTree = ref<any>(null)
@@ -901,11 +987,28 @@ const addedTableNames = computed(() => Array.from(tableOnCanvasSet.value))
 const isTableOnCanvas = (tableName: string) => tableOnCanvasSet.value.has(tableName)
 const savedConnections = ref<any[]>([])
 const currentConnectionId = ref<number | null>(null)
+
+interface ConnectionState {
+  tables: Record<string, any[]>
+  metadataTree: any
+  nodes: Node[]
+  edges: Edge[]
+  viewport: { x: number; y: number; zoom: number }
+  timestamp: number
+  canvasId: number | null
+}
+const connectionCache = ref<Record<string, ConnectionState>>({})
+
 const connectionStatuses = ref<Record<number, 'success' | 'error' | 'loading'>>({})
+const connectionErrors = ref<Record<number, string>>({})
+const connectionMetadata = ref<Record<string, { tables: Record<string, any[]>, tree: any }>>({})
 const projectName = ref('')
 const isSaveDialogOpen = ref(false)
 const isConnectionDialogOpen = ref(false)
 const editingConnection = ref<any>(null)
+const isDeleteConnectionDialogOpen = ref(false)
+const deleteConnectionTarget = ref<any>(null)
+const isDeletingConnection = ref(false)
 const hoveredColumn = ref<{ tableName: string; columnName: string } | null>(null)
 const hoveredEdgeId = ref<string | null>(null)
 let isUpdatingEdgeStyles = false
@@ -1142,23 +1245,92 @@ watch(() => dbConfig.value.type, (newType) => {
 })
 
 const checkConnectionStatus = async (conn: any) => {
+  if (!conn?.id) return false
   connectionStatuses.value[conn.id] = 'loading'
   try {
     const headers = useRequestHeaders(['cookie'])
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), CONNECTION_TEST_TIMEOUT_MS)
     const res: any = await $fetch('/api/connections/test', {
       method: 'POST',
-      body: { id: conn.id },
-      headers
+      body: { id: conn.id, timeoutMs: CONNECTION_TEST_TIMEOUT_MS },
+      headers,
+      signal: controller.signal,
     })
+    clearTimeout(timeoutId)
     if (res.success) {
       connectionStatuses.value[conn.id] = 'success'
+      return true
     } else {
       connectionStatuses.value[conn.id] = 'error'
+      return false
     }
   } catch (e) {
     connectionStatuses.value[conn.id] = 'error'
+    return false
   }
 }
+
+const loadCanvas = async (connId: number | null) => {
+  isCanvasLoaded.value = false
+  if (!connId) {
+    // Clear canvas
+    setNodes([])
+    setEdges([])
+    canvasId.value = null
+    isCanvasLoaded.value = true
+    return
+  }
+  
+  // If we have cached state, skip API load
+  // selectConnection should have already restored it
+  if (connectionCache.value[String(connId)]) {
+    isCanvasLoaded.value = true
+    return
+  }
+  
+  try {
+    const headers = useRequestHeaders(['cookie'])
+    const canvasRes: any = await $fetch(`/api/canvas?connectionId=${connId}`, { headers })
+    
+    if (canvasRes.success && canvasRes.data) {
+      canvasId.value = canvasRes.data.id // Store canvas ID
+      if (canvasRes.data.data) {
+        if (isFlowReady.value) {
+          isRestoringCanvas.value = true
+          fromObject(canvasRes.data.data)
+          if (canvasRes.data.data.patternRules) {
+            patternRules.value = canvasRes.data.data.patternRules
+          }
+          hydrateTableNodes()
+          applyEdgeDefaults()
+          isRestoringCanvas.value = false
+          nextTick(() => resetHistory())
+          
+          if (!canvasRes.data.data.viewport && typeof canvasRes.data.data.zoom === 'undefined') {
+            setTimeout(() => fitView(), 100)
+          }
+        } else {
+          pendingCanvasData.value = canvasRes.data.data
+        }
+      }
+    } else {
+       // No canvas found for this connection, clear it
+       setNodes([])
+       setEdges([])
+       canvasId.value = null
+    }
+  } catch (e) {
+    console.error('Failed to load canvas', e)
+    toast.error('加载画布失败')
+  } finally {
+    isCanvasLoaded.value = true
+  }
+}
+
+watch(currentConnectionId, (newId) => {
+  loadCanvas(newId)
+})
 
 // Load Project Data
 const loadProject = async () => {
@@ -1172,6 +1344,7 @@ const loadProject = async () => {
       savedConnections.value = connRes.data
       // Auto-check connection status
       savedConnections.value.forEach(conn => checkConnectionStatus(conn))
+      
       if (import.meta.client && savedConnections.value.length > 0) {
         const storedConnectionIdRaw = localStorage.getItem(`lastConnectionId:${projectId.value}`)
         const storedConnectionId = storedConnectionIdRaw ? Number(storedConnectionIdRaw) : null
@@ -1188,36 +1361,17 @@ const loadProject = async () => {
           if (defaultConn.id !== currentConnectionId.value || !tables.value || Object.keys(tables.value).length === 0) {
             currentConnectionId.value = defaultConn.id
             dbConfig.value = { ...defaultConn }
-            await connectDB()
+            connectDB() // Don't await here to prevent blocking project load
           }
         }
+      } else {
+        // No connections in this project
+        currentConnectionId.value = null
+        tables.value = {}
       }
     }
 
-    // 2. Load Canvas
-    const canvasRes: any = await $fetch(`/api/canvas?projectId=${projectId.value}`, { headers })
-    if (canvasRes.success && canvasRes.data) {
-      canvasId.value = canvasRes.data.id // Store canvas ID
-      if (canvasRes.data.data) {
-        if (isFlowReady.value) {
-          isRestoringCanvas.value = true
-          fromObject(canvasRes.data.data)
-          if (canvasRes.data.data.patternRules) {
-            patternRules.value = canvasRes.data.data.patternRules
-          }
-          hydrateTableNodes()
-          applyEdgeDefaults()
-          isRestoringCanvas.value = false
-          nextTick(() => resetHistory())
-          // Only fit view if no viewport data is present (backwards compatibility)
-          if (!canvasRes.data.data.viewport && typeof canvasRes.data.data.zoom === 'undefined') {
-            setTimeout(() => fitView(), 100)
-          }
-        } else {
-          pendingCanvasData.value = canvasRes.data.data
-        }
-      }
-    }
+    // Canvas loading is now handled by watcher on currentConnectionId
   } catch (error) {
     console.error('Failed to load project data', error)
     toast.error(t('toast.loadProjectFailed'))
@@ -1331,7 +1485,8 @@ const autoSave = useDebounceFn(async () => {
       body: {
         id: canvasId.value,
         data: flowData,
-        projectId: projectId.value
+        projectId: projectId.value,
+        connectionId: currentConnectionId.value
       }
     })
     if (res.success) {
@@ -1430,7 +1585,8 @@ const saveCanvas = async () => {
       body: {
         id: canvasId.value,
         data: flowData,
-        projectId: projectId.value
+        projectId: projectId.value,
+        connectionId: currentConnectionId.value
       }
     })
 
@@ -2008,18 +2164,49 @@ const openEditConnectionDialog = (conn: any) => {
   isConnectionDialogOpen.value = true
 }
 
+const createCanvasForConnection = async (conn: any) => {
+  try {
+    const headers = useRequestHeaders(['cookie'])
+    const res: any = await $fetch('/api/canvas', {
+      method: 'PUT',
+      body: {
+        connectionId: conn.id,
+        projectId: projectId.value,
+        data: { nodes: [], edges: [] }
+      },
+      headers
+    })
+
+    if (res.success) {
+      toast.success(t('toast.canvasCreated', 'New canvas created'))
+      await loadProject()
+      selectConnection(conn)
+    } else {
+       toast.error('Failed to create canvas')
+    }
+  } catch (e) {
+    console.error(e)
+    toast.error('Failed to create canvas')
+  }
+}
+
 const onConnectionContextMenu = ({ event, conn }: { event: MouseEvent, conn: any }) => {
-  connectionContextMenu.value = {
-    visible: true,
-    x: event.clientX,
-    y: event.clientY,
-    items: [
+  const items = [
       {
         label: t('canvas.connectionMenu.test'),
         icon: Activity,
-        action: () => {
-          checkConnectionStatus(conn)
+        action: async () => {
           toast.info(t('toast.testingConnection'))
+          const success = await checkConnectionStatus(conn)
+          if (success) {
+            toast.success(t('toast.databaseConnected'))
+            // If it's the current connection, refresh metadata
+            if (currentConnectionId.value === conn.id) {
+              connectDB()
+            }
+          } else {
+            toast.error(t('toast.connectionTestFailed'))
+          }
         }
       },
       {
@@ -2028,23 +2215,113 @@ const onConnectionContextMenu = ({ event, conn }: { event: MouseEvent, conn: any
         action: () => openEditConnectionDialog(conn)
       }
     ]
+
+  if (!conn.hasCanvas) {
+    items.push({
+      label: t('canvas.connectionMenu.createCanvas', 'Create Canvas'),
+      icon: Plus,
+      action: () => createCanvasForConnection(conn)
+    })
+  }
+
+  items.push({
+    label: t('canvas.connectionMenu.delete'),
+    icon: Trash2,
+    action: () => requestDeleteConnection(conn),
+  })
+
+  connectionContextMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    items
+  }
+}
+
+const requestDeleteConnection = (conn: any) => {
+  connectionContextMenu.value.visible = false
+  deleteConnectionTarget.value = conn
+  isDeleteConnectionDialogOpen.value = true
+}
+
+const confirmDeleteConnection = async () => {
+  const conn = deleteConnectionTarget.value
+  if (!conn || isDeletingConnection.value) return
+
+  isDeletingConnection.value = true
+  try {
+    const headers = useRequestHeaders(['cookie'])
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
+    const res: any = await $fetch(`/api/connections/${conn.id}`, {
+      method: 'DELETE',
+      headers,
+      signal: controller.signal,
+    })
+    clearTimeout(timeoutId)
+
+    if (res?.success) {
+      if (import.meta.client && projectId.value) {
+        const key = `lastConnectionId:${projectId.value}`
+        const current = localStorage.getItem(key)
+        if (current && Number(current) === conn.id) {
+          localStorage.removeItem(key)
+        }
+      }
+
+      if (currentConnectionId.value === conn.id) {
+        abortMetadataRequest('switch')
+        currentConnectionId.value = null
+        tables.value = {}
+        metadataTree.value = null
+      }
+
+      // Clean up caches
+      delete connectionCache.value[String(conn.id)]
+      delete connectionMetadata.value[String(conn.id)]
+      delete connectionStatuses.value[conn.id]
+
+      isDeleteConnectionDialogOpen.value = false
+      deleteConnectionTarget.value = null
+
+      toast.success(t('toast.connectionDeleted'))
+      await loadProject()
+    } else {
+      throw new Error(res?.error || 'Delete failed')
+    }
+  } catch (error: any) {
+    if (isAbortError(error)) {
+      toast.error(t('toast.error'), { description: t('toast.connectionTimeout') })
+      return
+    }
+    toast.error(t('toast.error'), { description: error.message })
+  } finally {
+    isDeletingConnection.value = false
   }
 }
 
 const saveConnectionDetails = async () => {
-  isConnecting.value = true
+  if (isSavingConnection.value) {
+    abortSaveRequest('timeout')
+  }
+
+  saveAbortController = new AbortController()
+  if (saveAbortTimeoutId) clearTimeout(saveAbortTimeoutId)
+  saveAbortTimeoutId = setTimeout(() => abortSaveRequest('timeout'), 40000)
+
+  isSavingConnection.value = true
   try {
     const headers = useRequestHeaders(['cookie'])
     // Test connection first
     const testRes: any = await $fetch('/api/connections/test', {
       method: 'POST',
-      body: { config: dbConfig.value },
-      headers
+      body: { config: dbConfig.value, timeoutMs: CONNECTION_TEST_TIMEOUT_MS },
+      headers,
+      signal: saveAbortController.signal,
     })
 
     if (!testRes.success) {
       toast.error(t('toast.connectionTestFailed'), { description: testRes.error })
-      isConnecting.value = false
       return
     }
 
@@ -2054,35 +2331,119 @@ const saveConnectionDetails = async () => {
        res = await $fetch('/api/connections', {
          method: 'PUT',
          body: { ...dbConfig.value, id: editingConnection.value.id },
-         headers
+         headers,
+         signal: saveAbortController.signal,
        })
     } else {
        // Create
        res = await $fetch('/api/connections', {
          method: 'POST',
          body: { ...dbConfig.value, projectId: projectId.value },
-         headers
+         headers,
+         signal: saveAbortController.signal,
        })
     }
 
     if (res.success) {
       toast.success(editingConnection.value ? t('toast.connectionUpdated') : t('toast.connectionSaved'))
       isConnectionDialogOpen.value = false
-      loadProject() // Reload list
+      await loadProject() // Reload list
+      
+      // If it was a new connection, select it
+      if (!editingConnection.value && res.data) {
+        selectConnection(res.data)
+      } else if (editingConnection.value && currentConnectionId.value === editingConnection.value.id) {
+        // If we updated the current connection, refresh metadata
+        connectDB()
+      }
     } else {
       toast.error(t('toast.saveConnectionFailed'))
     }
   } catch (error: any) {
+    if (isAbortError(error)) {
+      const reason = saveAbortReason
+      saveAbortReason = null
+      if (reason === 'timeout') {
+        toast.error(t('toast.error'), { description: t('toast.connectionTimeout') })
+        return
+      }
+      return
+    }
     toast.error(t('toast.error'), { description: error.message })
   } finally {
-    isConnecting.value = false
+    if (saveAbortTimeoutId) clearTimeout(saveAbortTimeoutId)
+    saveAbortTimeoutId = null
+    saveAbortController = null
+    saveAbortReason = null
+    isSavingConnection.value = false
   }
 }
 
 const selectConnection = (conn: any) => {
-  if (currentConnectionId.value === conn.id) return
+  // Save current state before switching
+  if (currentConnectionId.value) {
+    const currentId = String(currentConnectionId.value)
+    const flowState = toObject()
+    connectionCache.value[currentId] = {
+      tables: { ...tables.value },
+      metadataTree: metadataTree.value,
+      nodes: flowState.nodes,
+      edges: flowState.edges,
+      viewport: flowState.viewport,
+      timestamp: Date.now(),
+      canvasId: canvasId.value
+    }
+  }
+
+  // If clicking the same connection, only refresh if metadata is empty
+  if (currentConnectionId.value === conn.id && Object.keys(tables.value).length > 0) return
+  
+  const isDifferent = currentConnectionId.value !== conn.id
+  abortMetadataRequest('switch')
   dbConfig.value = { ...conn }
   currentConnectionId.value = conn.id
+  
+  // Clear only if it's a different connection
+    if (isDifferent) {
+      const cached = connectionCache.value[String(conn.id)]
+      
+      // Update global metadata from cache if available
+      if (cached && Object.keys(cached.tables).length > 0) {
+        connectionMetadata.value[String(conn.id)] = {
+          tables: cached.tables,
+          tree: cached.metadataTree
+        }
+      }
+
+      // Check if we have valid cached data
+      if (cached && Object.keys(cached.tables).length > 0) {
+      isRestoringCanvas.value = true
+      tables.value = cached.tables
+      metadataTree.value = cached.metadataTree
+      setNodes(cached.nodes)
+      setEdges(cached.edges)
+      setViewport(cached.viewport)
+      canvasId.value = cached.canvasId
+      
+      hydrateTableNodes()
+      applyEdgeDefaults()
+
+      if (import.meta.client && projectId.value) {
+        localStorage.setItem(`lastConnectionId:${projectId.value}`, String(conn.id))
+      }
+      nextTick(() => {
+        isRestoringCanvas.value = false
+      })
+      return
+    }
+
+    tables.value = {}
+    metadataTree.value = null
+    setNodes([])
+    setEdges([])
+    canvasId.value = null
+  }
+  
   if (import.meta.client && projectId.value) {
     localStorage.setItem(`lastConnectionId:${projectId.value}`, String(conn.id))
   }
@@ -2090,11 +2451,20 @@ const selectConnection = (conn: any) => {
 }
 
 const connectDB = async () => {
-  isConnecting.value = true
+  if (currentConnectionId.value) {
+    connectionStatuses.value[currentConnectionId.value] = 'loading'
+    delete connectionErrors.value[currentConnectionId.value]
+  }
+  abortMetadataRequest('switch')
+  metadataAbortController = new AbortController()
+  const timeoutMs = getMetadataTimeoutMs()
+  metadataAbortTimeoutId = setTimeout(() => abortMetadataRequest('timeout'), timeoutMs)
+  isConnectingDb.value = true
   try {
     const res: any = await $fetch('/api/metadata', {
       method: 'POST',
-      body: dbConfig.value
+      body: { ...dbConfig.value, timeoutMs },
+      signal: metadataAbortController.signal,
     })
     tables.value = res.data
     metadataTree.value = res.tree || null
@@ -2104,17 +2474,106 @@ const connectDB = async () => {
     if (!currentConnectionId.value) {
       const saveRes: any = await $fetch('/api/connections', {
         method: 'POST',
-        body: { ...dbConfig.value, projectId: projectId.value }
+        body: { ...dbConfig.value, projectId: projectId.value },
+        signal: metadataAbortController.signal,
       })
       if (saveRes.success) {
         currentConnectionId.value = saveRes.data.id
         loadProject()
       }
     }
+    
+    // Update global metadata map
+    if (currentConnectionId.value) {
+      connectionMetadata.value[String(currentConnectionId.value)] = {
+        tables: tables.value,
+        tree: metadataTree.value
+      }
+      connectionStatuses.value[currentConnectionId.value] = 'success'
+    }
+    
+    // After successful metadata fetch, check if we need to load or create a canvas
+    if (currentConnectionId.value && !nodes.value.length) {
+      loadCanvas(currentConnectionId.value)
+    }
   } catch (error: any) {
+    console.error('Database connection error:', error)
+    if (currentConnectionId.value) {
+      connectionStatuses.value[currentConnectionId.value] = 'error'
+      connectionErrors.value[currentConnectionId.value] = error.message
+    }
+    if (isAbortError(error)) {
+      const reason = metadataAbortReason
+      metadataAbortReason = null
+      if (reason === 'timeout') {
+        tables.value = {}
+        metadataTree.value = null
+        toast.error(t('toast.error'), { description: t('toast.connectionTimeout') })
+      }
+      return
+    }
+    tables.value = {}
+    metadataTree.value = null
     toast.error(t('toast.error'), { description: error.message })
   } finally {
-    isConnecting.value = false
+    if (metadataAbortTimeoutId) clearTimeout(metadataAbortTimeoutId)
+    metadataAbortTimeoutId = null
+    metadataAbortController = null
+    metadataAbortReason = null
+    isConnectingDb.value = false
+  }
+}
+
+const fetchTableColumns = async (tableName: string, schemaNameOverride?: string) => {
+
+  if (tables.value[tableName]?.length > 0) return
+
+  let schemaName = schemaNameOverride || 'public'
+  if (!schemaNameOverride && metadataTree.value?.schemas) {
+    for (const [schema, data] of Object.entries(metadataTree.value.schemas)) {
+      if ((data as any).tables.includes(tableName)) {
+        schemaName = schema
+        break
+      }
+    }
+  }
+
+  const toastId = toast.loading(t('sidebar.loadingMetadata') || `Loading ${tableName}...`)
+
+  try {
+    const res: any = await $fetch('/api/metadata', {
+      method: 'POST',
+      body: { ...dbConfig.value, tableName, schemaName, timeoutMs: getMetadataTimeoutMs() },
+    })
+    
+    const hasTable = !!res?.data && Object.prototype.hasOwnProperty.call(res.data, tableName)
+    if (res?.success && hasTable) {
+        tables.value[tableName] = res.data[tableName] || []
+        
+        // Update caches
+        if (currentConnectionId.value) {
+             const cached = connectionCache.value[String(currentConnectionId.value)]
+             if (cached) {
+                 cached.tables[tableName] = res.data[tableName] || []
+             }
+             if (connectionMetadata.value[String(currentConnectionId.value)]) {
+                  connectionMetadata.value[String(currentConnectionId.value)].tables[tableName] = res.data[tableName] || []
+             }
+        }
+    } else {
+      const message = res?.error || res?.message || `Failed to load columns for ${tableName}`
+      throw new Error(message)
+    }
+  } catch (e) {
+      const message =
+        (e as any)?.data?.statusMessage ||
+        (e as any)?.data?.message ||
+        (e as any)?.message ||
+        String(e)
+      console.error('Failed to fetch columns', e)
+      toast.error(t('toast.error'), { description: message })
+  } finally {
+      toast.dismiss(toastId)
   }
 }
 
@@ -2171,11 +2630,18 @@ const handleGlobalDblClick = (event: MouseEvent) => {
   stopLocateColumns()
 }
 
-const addTableToCanvas = (tableName: string, position?: { x: number, y: number }) => {
+const addTableToCanvas = async (tableName: string, position?: { x: number, y: number }, schemaName?: string) => {
   const tableId = `table-${tableName}`
   if (nodes.value.some(n => n.id === tableId)) {
     toast.info(t('toast.info'), { description: t('toast.tableAlreadyOnCanvas') })
     return
+  }
+
+  if (!tables.value[tableName] || tables.value[tableName].length === 0) {
+      await fetchTableColumns(tableName, schemaName)
+      if (!tables.value[tableName] || tables.value[tableName].length === 0) {
+          return
+      }
   }
   
   const columns = tables.value[tableName] || []
@@ -2222,7 +2688,7 @@ const onDrop = (event: DragEvent) => {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     if (data.type === 'table' && data.tableName) {
       const position = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
-      addTableToCanvas(data.tableName, position)
+      addTableToCanvas(data.tableName, position, data.schemaName)
     }
   } catch (e) {
     console.error('Failed to parse drop data', e)
@@ -2237,9 +2703,6 @@ const removeTableFromCanvas = (tableName: string) => {
   }
 }
 
-const loadCanvas = async () => {
-  await loadProject()
-}
 
 const clearCanvas = () => {
   removeNodes(nodes.value)
@@ -2320,10 +2783,28 @@ const togglePatternConfig = () => {
 }
 
 const handleApplyQuery = (result: any) => {
-  const { visitedNodeIds, traversedEdgeIds, hideUnrelated } = result
-  const visitedSet = new Set<string>(visitedNodeIds || [])
-  const traversedSet = new Set<string>(traversedEdgeIds || [])
+  const { visitedNodeIds, traversedEdgeIds, traversedEdgeKeys, hideUnrelated } = result
+  const visitedSet = new Set<string>((visitedNodeIds || []).map(String))
+  const traversedIdSet = new Set<string>((traversedEdgeIds || []).map(String))
+  const traversedKeySet = new Set<string>((traversedEdgeKeys || []).map(String))
   const isReferenceMode = connectionMode.value === 'reference'
+
+  const normalizeEdgeHandle = (handle: unknown) => String(handle || '').replace(/-(source|target)$/, '')
+  const buildEdgeKey = (edge: any) => {
+    const source = String(edge?.source || '')
+    const target = String(edge?.target || '')
+    const sourceHandle = normalizeEdgeHandle(edge?.sourceHandle)
+    const targetHandle = normalizeEdgeHandle(edge?.targetHandle)
+    const a = sourceHandle ? `${source}:${sourceHandle}` : source
+    const b = targetHandle ? `${target}:${targetHandle}` : target
+    return [a, b].sort().join('|')
+  }
+  const isTraversedEdge = (edge: any) => {
+    if (!edge) return false
+    if (traversedIdSet.has(String(edge.id))) return true
+    if (traversedKeySet.size === 0) return false
+    return traversedKeySet.has(buildEdgeKey(edge))
+  }
 
   // Update nodes
   setNodes((current) =>
@@ -2348,7 +2829,7 @@ const handleApplyQuery = (result: any) => {
   // Update edges
   setEdges((current) =>
     current.map((edge) => {
-      const isTraversed = traversedSet.has(edge.id)
+      const isTraversed = isTraversedEdge(edge)
       const userHidden = (edge.data as any)?.isHidden ?? false
       // If hiding unrelated, hide edges that are not traversed
       // Or maybe we should just hide edges connected to hidden nodes?
@@ -2368,11 +2849,11 @@ const handleApplyQuery = (result: any) => {
   )
 
   if (isReferenceMode) {
-    if (traversedEdgeIds?.length) {
+    if ((traversedEdgeIds?.length || 0) > 0 || (traversedEdgeKeys?.length || 0) > 0) {
       clearLocateColumns()
       const targets: Array<{ nodeId: string; columnName: string }> = []
       edges.value.forEach((e) => {
-        if (!traversedSet.has(e.id)) return
+        if (!isTraversedEdge(e)) return
         if (e.source && e.sourceHandle) {
           targets.push({ nodeId: e.source, columnName: String(e.sourceHandle).replace(/-source$/, '') })
         }
@@ -2426,31 +2907,51 @@ const handleResetQuery = () => {
 
 const loadSavedView = async (viewId: string) => {
   if (!import.meta.client) return
+  if (isLoadingSavedView.value && loadingSavedViewId.value === viewId) return
+  isLoadingSavedView.value = true
+  loadingSavedViewId.value = viewId
+  if (isPreviewMode.value && String(route.query.viewId || '') === viewId) {
+    isPreviewViewLoading.value = true
+  }
   try {
     const { success, data: view, error } = await $fetch(`/api/saved-views/${viewId}`)
 
     if (success && view && view.result) {
+      let canvasAttempts = 0
+      while ((!isCanvasLoaded.value || !isFlowReady.value) && canvasAttempts < 40) {
+        await new Promise(r => setTimeout(r, 100))
+        canvasAttempts++
+      }
+
       // Wait for tables to be loaded if project is loading
       let attempts = 0
-      while (Object.keys(tables.value).length === 0 && (isLoadingProject.value || isConnecting.value) && attempts < 20) {
+      while (Object.keys(tables.value).length === 0 && (isLoadingProject.value || currentConnectionStatus.value === 'loading') && attempts < 20) {
         await new Promise(r => setTimeout(r, 200))
         attempts++
       }
 
-      // Add missing tables
-      const { visitedNodeIds } = view.result
+      // Add missing tables or update positions
+      const { visitedNodeIds, layout } = view.result
       const existingNodeIds = new Set(nodes.value.map(n => n.id))
       const nodesToAdd: Node[] = []
+      const nodesToUpdatePosition: Record<string, { x: number, y: number }> = {}
 
       visitedNodeIds.forEach((nodeId: string) => {
-         if (!existingNodeIds.has(nodeId) && nodeId.startsWith('table-')) {
+         const position = layout?.[nodeId] || { x: Math.random() * 800, y: Math.random() * 600 }
+
+         if (existingNodeIds.has(nodeId)) {
+             // If node exists and we have a saved layout for it, track it for update
+             if (layout?.[nodeId]) {
+                 nodesToUpdatePosition[nodeId] = position
+             }
+         } else if (nodeId.startsWith('table-')) {
              const tableName = nodeId.replace('table-', '')
              const columns = tables.value[tableName]
              if (columns) {
                  const newNode: Node = {
                     id: nodeId,
                     type: 'table',
-                    position: { x: Math.random() * 800, y: Math.random() * 600 },
+                    position,
                     data: { 
                       label: tableName,
                       columns: columns.map((c: any) => ({
@@ -2478,9 +2979,18 @@ const loadSavedView = async (viewId: string) => {
       
       if (nodesToAdd.length > 0) {
           addNodes(nodesToAdd)
-          await nextTick()
-          // Optional: Auto layout could be nice here, but maybe too aggressive
       }
+
+      // Update positions of existing nodes if layout is provided
+      if (Object.keys(nodesToUpdatePosition).length > 0) {
+          setNodes(nds => nds.map(n => {
+              const pos = nodesToUpdatePosition[n.id]
+              if (pos) return { ...n, position: pos }
+              return n
+          }))
+      }
+
+      await nextTick()
 
       handleApplyQuery({
         ...view.result,
@@ -2493,12 +3003,27 @@ const loadSavedView = async (viewId: string) => {
       if (!isPreviewMode.value) {
         toast.success(`已加载视图: ${view.name}`)
       }
+
+      const targetNodeIds = (view.result.visitedNodeIds || []).filter((id: any) => typeof id === 'string' && id.startsWith('table-'))
+      if (targetNodeIds.length > 0) {
+        fitView({ nodes: targetNodeIds, padding: 0.4, duration: isPreviewMode.value ? 0 : 600 })
+      } else {
+        setTimeout(() => fitView({ padding: 0.4, duration: isPreviewMode.value ? 0 : 600 }), 50)
+      }
     } else {
       console.error('Failed to load view', error)
       toast.error('加载视图失败')
     }
   } catch (e) {
     console.error('Failed to load view', e)
+  } finally {
+    if (loadingSavedViewId.value === viewId) {
+      isLoadingSavedView.value = false
+      loadingSavedViewId.value = null
+    }
+    if (isPreviewMode.value && String(route.query.viewId || '') === viewId) {
+      isPreviewViewLoading.value = false
+    }
   }
 }
 
@@ -2515,6 +3040,14 @@ watch(isFlowReady, (ready) => {
     }, 500)
   }
 })
+
+watch([isPreviewMode, () => route.query.viewId], ([preview, viewId]) => {
+  if (preview && viewId) {
+    isPreviewViewLoading.value = true
+    return
+  }
+  isPreviewViewLoading.value = false
+}, { immediate: true })
 
 const onBeforeUnload = (event: BeforeUnloadEvent) => {
   if (isDraft.value && isDraftDirty.value) {
@@ -2546,6 +3079,7 @@ onBeforeUnmount(() => {
     <!-- Column 1: App Sidebar (Navigation & User) -->
     <AppSidebar
       v-if="!isPreviewMode"
+      ref="appSidebarRef"
       v-model:isCollapsed="isAppSidebarCollapsed"
       @open-settings="openSettingsDialog"
     />
@@ -2554,24 +3088,30 @@ onBeforeUnmount(() => {
     <CanvasSidebar
         v-if="!isPreviewMode"
         :isOpen="isCanvasSidebarOpen"
+        v-model:width="sidebarWidth"
         :savedConnections="savedConnections"
         :connectionStatuses="connectionStatuses"
+        :connectionErrors="connectionErrors"
         :currentConnectionId="currentConnectionId"
         :availableTables="availableTables"
         :metadataTree="metadataTree"
+        :allMetadata="connectionMetadata"
         :isTableOnCanvas="isTableOnCanvas"
         :addedTables="addedTableNames"
         :tablesData="tables"
         :isRelationshipQueryOpen="isRelationshipQueryOpen"
         :isPatternConfigOpen="isPatternConfigOpen"
+        :isAIRelationshipPanelOpen="isAIRelationshipPanelOpen"
         @close="isCanvasSidebarOpen = false"
         @add-connection="openAddConnectionDialog"
         @select-connection="selectConnection"
         @connection-context-menu="onConnectionContextMenu"
-        @add-table="addTableToCanvas"
+        @add-table="(payload: any) => typeof payload === 'string' ? addTableToCanvas(payload) : addTableToCanvas(payload.tableName, undefined, payload.schemaName)"
         @remove-table="removeTableFromCanvas"
         @open-relationship-query="toggleRelationshipQuery"
         @open-pattern-config="togglePatternConfig"
+        @open-ai-relationship="toggleAIRelationshipPanel"
+        @expand-table="(payload: any) => typeof payload === 'string' ? fetchTableColumns(payload) : fetchTableColumns(payload.tableName, payload.schemaName)"
       />
 
     <!-- Column 3: Main Canvas Area -->
@@ -2698,9 +3238,38 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <DialogFooter>
-            <Button @click="saveConnectionDetails" :disabled="isConnecting">
-               <Loader2 v-if="isConnecting" class="w-4 h-4 mr-2 animate-spin" />
+            <Button @click="saveConnectionDetails" :disabled="isSavingConnection">
+               <Loader2 v-if="isSavingConnection" class="w-4 h-4 mr-2 animate-spin" />
                {{ editingConnection ? t('connectionDialog.action.update') : t('connectionDialog.action.save') }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        :open="isDeleteConnectionDialogOpen"
+        @update:open="(open) => { if (isDeletingConnection) return; isDeleteConnectionDialogOpen = open; if (!open) deleteConnectionTarget = null }"
+      >
+        <DialogContent class="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>{{ t('canvas.connectionMenu.delete') }}</DialogTitle>
+            <DialogDescription>{{ t('canvas.connectionMenu.deleteConfirm') }}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              :disabled="isDeletingConnection"
+              @click="isDeleteConnectionDialogOpen = false; deleteConnectionTarget = null"
+            >
+              {{ t('draft.cancel') }}
+            </Button>
+            <Button
+              variant="destructive"
+              :disabled="!deleteConnectionTarget || isDeletingConnection"
+              @click="confirmDeleteConnection"
+            >
+              <Loader2 v-if="isDeletingConnection" class="w-4 h-4 mr-2 animate-spin" />
+              {{ t('canvas.connectionMenu.delete') }}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2825,26 +3394,61 @@ onBeforeUnmount(() => {
       />
       
       <VueFlow 
+        :key="isPreviewMode ? 'preview' : 'editor'"
         :node-types="nodeTypes"
         :default-viewport="{ zoom: 0.8 }"
         :min-zoom="0.2"
         :max-zoom="4"
-        :nodes-draggable="!isPreviewMode"
+        :nodes-draggable="true"
         :nodes-connectable="!isPreviewMode && interactionMode === 'pointer' && connectionMode === 'line'"
-        :elements-selectable="!isPreviewMode"
+        :elements-selectable="true"
         :pan-on-drag="isPreviewMode ? true : interactionMode === 'hand'"
         :selection-on-drag="!isPreviewMode && interactionMode === 'pointer'"
         :selection-key-code="isPreviewMode ? false : (interactionMode === 'pointer' ? true : 'Shift')"
         @connect="onConnect"
       >
         <!-- Loading Overlay -->
-        <div v-if="isLoadingProject" class="absolute inset-0 z-[100] flex items-center justify-center bg-background/50 backdrop-blur-sm">
+        <div
+          v-if="isLoadingProject || isPreviewViewLoading"
+          class="absolute inset-0 z-[100] flex items-center justify-center"
+          :class="isPreviewViewLoading ? 'bg-background' : 'bg-background/50 backdrop-blur-sm'"
+        >
           <div class="flex flex-col items-center gap-3">
             <Loader2 class="h-8 w-8 animate-spin text-primary" />
             <span class="text-sm font-medium text-muted-foreground">{{ t('projects.loading') }}</span>
           </div>
         </div>
         <Background pattern-color="hsl(var(--border))" :gap="20" :size="1" />
+
+        <div v-if="isPreviewMode" class="absolute top-4 right-4 z-50 flex items-center gap-2 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl p-1">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            class="rounded-full h-9 w-9"
+            :class="{ 'bg-background text-foreground': connectionMode === 'line' }"
+            @click="setConnectionMode('line')"
+          >
+            <Link class="h-4 w-4" />
+          </Button>
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            class="rounded-full h-9 w-9"
+            :class="{ 'bg-background text-foreground': connectionMode === 'reference' }"
+            @click="setConnectionMode('reference')"
+          >
+            <Tags class="h-4 w-4" />
+          </Button>
+          <div class="h-6 w-px bg-border/70 mx-1"></div>
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            class="rounded-full h-9 w-9"
+            @click="fitView({ padding: 0.4, duration: 600 })"
+          >
+            <Maximize class="h-4 w-4" />
+          </Button>
+        </div>
         
         <!-- Canvas Toolbar (Left) -->
         <div v-if="!isPreviewMode" class="absolute left-6 top-1/2 -translate-y-1/2 z-50 flex flex-col items-center gap-3 p-1 bg-background/90 backdrop-blur-md border border-border rounded-full shadow-2xl">
@@ -2982,7 +3586,8 @@ onBeforeUnmount(() => {
       <Transition name="slide-right">
         <div v-if="!isPreviewMode && isRelationshipQueryOpen" class="absolute top-0 right-0 h-full z-50 shadow-2xl">
           <RelationshipQueryPanel 
-            class="h-full border-l border-border bg-background w-[350px]"
+            class="h-full border-l border-border bg-background"
+            :style="{ width: `${sidebarWidth}px` }"
             :tablesData="tables"
             :nodes="nodes"
             :edges="edges"
@@ -2990,17 +3595,33 @@ onBeforeUnmount(() => {
             @update:config="relationshipQueryConfig = $event"
             @apply-query="handleApplyQuery"
             @reset-query="handleResetQuery"
+            @view-saved="handleViewSaved"
             @close="isRelationshipQueryOpen = false"
           />
         </div>
       </Transition>
-    </div>
 
-    <!-- Right Sidebar (Pattern Configuration) -->
+      <!-- AI Relationship Panel (Right Sidebar) -->
+      <Transition name="slide-right">
+        <div v-if="!isPreviewMode && isAIRelationshipPanelOpen" class="absolute top-0 right-0 h-full z-50 shadow-2xl">
+          <AIRelationshipPanel 
+            class="h-full border-l border-border bg-background"
+            :style="{ width: `${sidebarWidth}px` }"
+            :nodes="nodes"
+            :edges="edges"
+            :connection-id="currentConnectionId"
+            @close="isAIRelationshipPanelOpen = false"
+            @add-edges="handleAddDetectedEdges"
+          />
+        </div>
+      </Transition>
+
+      <!-- Right Sidebar (Pattern Configuration) -->
     <Transition name="slide-right">
       <div v-if="!isPreviewMode && isPatternConfigOpen" class="absolute top-0 right-0 h-full z-40 shadow-2xl">
         <PatternConfigPanel 
           class="h-full border-l border-border bg-background"
+          :style="{ width: `${sidebarWidth}px` }"
           :rules="patternRules"
           :detection-result="detectionStats"
           :detected-edges="detectedPatternEdges"
@@ -3022,6 +3643,7 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
   </div>
+</div>
 </template>
 
 <style>

@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full w-[400px] border-l border-border bg-background flex flex-col transition-all duration-300">
+  <div class="h-full border-l border-border bg-background flex flex-col transition-all duration-300">
     <div class="flex items-center justify-between p-4 border-b border-border shrink-0">
       <h3 class="text-lg font-semibold text-foreground">模式匹配配置与管理</h3>
       <Button variant="ghost" size="sm" @click="collapsePanel">

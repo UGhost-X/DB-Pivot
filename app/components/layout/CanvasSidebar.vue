@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useI18n } from '@/composables/useI18n'
-import { useRouter, useRoute } from 'vue-router'
 import { 
   Search, 
   PlusCircle, 
@@ -26,7 +26,8 @@ import {
   Network,
   Settings,
   Trash2,
-  Minus
+  Minus,
+  BrainCircuit
 } from 'lucide-vue-next'
 import PgsqlSvg from '@/assets/icons/Pgsql.svg?component'
 import MysqlSvg from '@/assets/icons/Mysql.svg?component'
@@ -35,14 +36,19 @@ import SqliteSvg from '@/assets/icons/sqlite.svg?component'
 const props = defineProps<{
   savedConnections: any[]
   connectionStatuses: Record<number, string>
+  connectionErrors?: Record<number, string>
   currentConnectionId: number | null
   availableTables: string[]
+  tablesData?: Record<string, any[]>
   metadataTree?: any
+  allMetadata?: Record<string, { tables: Record<string, any[]>, tree: any }>
   isTableOnCanvas: (tableName: string) => boolean
   isOpen: boolean
   addedTables?: string[]
   isRelationshipQueryOpen: boolean
   isPatternConfigOpen: boolean
+  isAIRelationshipPanelOpen: boolean
+  width: number
 }>()
 
 const emit = defineEmits<{
@@ -50,23 +56,24 @@ const emit = defineEmits<{
   (e: 'add-connection'): void
   (e: 'select-connection', conn: any): void
   (e: 'connection-context-menu', payload: { event: MouseEvent, conn: any }): void
-  (e: 'add-table', tableName: string): void
+  (e: 'add-table', payload: { tableName: string; schemaName: string }): void
   (e: 'remove-table', tableName: string): void
   (e: 'open-relationship-query'): void
   (e: 'open-pattern-config'): void
+  (e: 'open-ai-relationship'): void
+  (e: 'expand-table', payload: { tableName: string; schemaName: string }): void
+  (e: 'update:width', value: number): void
 }>()
 
-const onDragStart = (event: DragEvent, tableName: string) => {
+const onDragStart = (event: DragEvent, tableName: string, schemaName: string) => {
   if (event.dataTransfer) {
-    event.dataTransfer.setData('application/json', JSON.stringify({ type: 'table', tableName }))
+    event.dataTransfer.setData('application/json', JSON.stringify({ type: 'table', tableName, schemaName }))
     event.dataTransfer.effectAllowed = 'copy'
   }
 }
 
 const tableSearch = ref('')
 const { t } = useI18n()
-const router = useRouter()
-const route = useRoute()
 const expandedConnections = ref<Record<number, boolean>>({})
 const expandedNodes = ref<Record<string, boolean>>({})
 
@@ -88,6 +95,19 @@ const currentSchemas = computed<Record<string, { tables: string[] }> | null>(() 
   if (!schemas || typeof schemas !== 'object') return null
   return schemas
 })
+
+const getSchemasForConnection = (connId: number) => {
+  if (connId === props.currentConnectionId) return currentSchemas.value
+  const meta = props.allMetadata?.[String(connId)]
+  const schemas = meta?.tree?.schemas
+  if (!schemas || typeof schemas !== 'object') return null
+  return schemas
+}
+
+const getTablesDataForConnection = (connId: number) => {
+  if (connId === props.currentConnectionId) return props.tablesData
+  return props.allMetadata?.[String(connId)]?.tables
+}
 
 const ensureExpanded = (connId: number) => {
   if (expandedConnections.value[connId] === undefined) {
@@ -120,13 +140,76 @@ const expandedTables = ref<Set<string>>(new Set())
 const isAddedOpen = ref(true)
 const isUnaddedOpen = ref(true)
 
-const toggleTable = (tableName: string) => {
-  if (expandedTables.value.has(tableName)) {
-    expandedTables.value.delete(tableName)
+const getTableKey = (schemaName: string, tableName: string) => `${schemaName}:${tableName}`
+
+const toggleTable = (schemaName: string, tableName: string) => {
+  const key = getTableKey(schemaName, tableName)
+  if (expandedTables.value.has(key)) {
+    expandedTables.value.delete(key)
   } else {
-    expandedTables.value.add(tableName)
+    expandedTables.value.add(key)
+    emit('expand-table', { tableName, schemaName })
   }
 }
+
+const sidebarEl = ref<HTMLDivElement | null>(null)
+const isResizing = ref(false)
+const RESIZE_MIN_PX = 220
+const RESIZE_MAX_PX = 560
+let resizePointerId: number | null = null
+let resizeStartX = 0
+let resizeStartWidth = 0
+let restoreUserSelect: string | null = null
+
+const clampWidth = (value: number) => Math.min(RESIZE_MAX_PX, Math.max(RESIZE_MIN_PX, value))
+
+const startResize = (event: PointerEvent) => {
+  if (!props.isOpen) return
+  const currentTarget = event.currentTarget as HTMLElement | null
+  currentTarget?.setPointerCapture(event.pointerId)
+  resizePointerId = event.pointerId
+  resizeStartX = event.clientX
+  resizeStartWidth = props.width
+  isResizing.value = true
+  restoreUserSelect = document.body.style.userSelect
+  document.body.style.userSelect = 'none'
+}
+
+const onResizeMove = (event: PointerEvent) => {
+  if (resizePointerId === null) return
+  if (event.pointerId !== resizePointerId) return
+  const next = clampWidth(resizeStartWidth + (event.clientX - resizeStartX))
+  emit('update:width', next)
+  if (import.meta.client) localStorage.setItem('canvasSidebarWidth', String(next))
+}
+
+const stopResize = (event?: PointerEvent) => {
+  if (resizePointerId === null) return
+  if (event && event.pointerId !== resizePointerId) return
+  resizePointerId = null
+  isResizing.value = false
+  if (restoreUserSelect !== null) {
+    document.body.style.userSelect = restoreUserSelect
+    restoreUserSelect = null
+  }
+}
+
+onMounted(() => {
+  if (!import.meta.client) return
+  const saved = localStorage.getItem('canvasSidebarWidth')
+  const parsed = saved ? Number(saved) : Number.NaN
+  if (Number.isFinite(parsed)) emit('update:width', clampWidth(parsed))
+  window.addEventListener('pointermove', onResizeMove)
+  window.addEventListener('pointerup', stopResize)
+  window.addEventListener('pointercancel', stopResize)
+})
+
+onBeforeUnmount(() => {
+  if (!import.meta.client) return
+  window.removeEventListener('pointermove', onResizeMove)
+  window.removeEventListener('pointerup', stopResize)
+  window.removeEventListener('pointercancel', stopResize)
+})
 
 const getColumnIcon = (column: any) => {
   if (column.isPrimaryKey) return Key
@@ -144,7 +227,6 @@ const getColumnIcon = (column: any) => {
 const getAddedTables = (tables: string[]) => {
   const filtered = filterTableNames(tables || [])
   if (props.addedTables) {
-    // console.log('getAddedTables check:', { added: props.addedTables, tables: filtered })
     return filtered.filter(t => props.addedTables!.includes(t))
   }
   return filtered.filter(t => props.isTableOnCanvas(t))
@@ -161,10 +243,15 @@ const getAvailableTables = (tables: string[]) => {
 
 <template>
   <div 
-    class="flex flex-col border-r bg-card transition-all duration-300 ease-in-out h-full relative z-20 shrink-0"
-    :class="[isOpen ? 'w-72 opacity-100 translate-x-0' : 'w-0 opacity-0 -translate-x-full border-r-0 overflow-hidden']"
+    ref="sidebarEl"
+    class="flex flex-col border-r bg-card h-full relative z-20 shrink-0"
+    :class="[
+      isResizing ? 'transition-none' : 'transition-all duration-300 ease-in-out',
+      isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-full border-r-0 overflow-hidden'
+    ]"
+    :style="isOpen ? { width: `${width}px` } : { width: '0px' }"
   >
-    <div class="flex flex-col h-full w-72">
+    <div class="flex flex-col h-full w-full">
       <!-- Header -->
       <div class="p-4 border-b border-border/40 flex items-center justify-between shrink-0">
         <div class="font-semibold text-sm">{{ t('sidebar.explorer') }}</div>
@@ -180,7 +267,7 @@ const getAvailableTables = (tables: string[]) => {
 
       <!-- Content -->
       <ScrollArea class="flex-1">
-        <Accordion type="multiple" class="w-full" :default-value="['connections']">
+        <Accordion type="multiple" class="w-full" :default-value="['connections', 'tools']">
 
            <!-- Connections -->
            <AccordionItem value="connections" class="border-b-0">
@@ -225,7 +312,16 @@ const getAvailableTables = (tables: string[]) => {
                         <div class="absolute -bottom-1 -right-1 bg-background rounded-full p-[1px] shadow-sm">
                           <Loader2 v-if="connectionStatuses[conn.id] === 'loading'" class="w-3 h-3 animate-spin text-muted-foreground" />
                           <CheckCircle2 v-else-if="connectionStatuses[conn.id] === 'success'" class="w-3 h-3 text-green-500" />
-                          <XCircle v-else-if="connectionStatuses[conn.id] === 'error'" class="w-3 h-3 text-red-500" />
+                          <TooltipProvider v-else-if="connectionStatuses[conn.id] === 'error'">
+                            <Tooltip>
+                              <TooltipTrigger as-child>
+                                <XCircle class="w-3 h-3 text-red-500" />
+                              </TooltipTrigger>
+                              <TooltipContent side="right">
+                                <p class="max-w-[200px] break-words text-xs">{{ connectionErrors?.[conn.id] || 'Connection failed' }}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         </div>
                       </div>
                       
@@ -251,12 +347,9 @@ const getAvailableTables = (tables: string[]) => {
                     leave-to-class="max-h-0 opacity-0"
                   >
                     <div v-show="expandedConnections[conn.id]" class="pl-6 pr-2 pb-1 overflow-hidden">
-                       <div v-if="conn.id !== currentConnectionId" class="py-2 px-2 text-sm text-muted-foreground">
-                        {{ t('sidebar.connectToSeeTables') }}
-                      </div>
-                      <div v-else-if="currentSchemas" class="space-y-1">
+                      <div v-if="getSchemasForConnection(conn.id)" class="space-y-1">
                         <div
-                          v-for="(schema, schemaName) in currentSchemas"
+                          v-for="(schema, schemaName) in getSchemasForConnection(conn.id)"
                           :key="schemaName"
                           class="rounded-md"
                         >
@@ -290,26 +383,27 @@ const getAvailableTables = (tables: string[]) => {
                                   <ChevronRight class="w-3 h-3 transition-transform duration-200" :class="{ 'rotate-90': isAddedOpen }" />
                                   {{ t('sidebar.added') }}
                                 </div>
-                                <div v-show="isAddedOpen">
+                                <div v-show="isAddedOpen" class="max-h-[40vh] overflow-auto pr-2">
                                   <div
                                     v-for="tableName in getAddedTables(schema.tables)"
                                     :key="`${schemaName}:${tableName}`"
                                     class="group rounded-md text-sm flex flex-col transition-colors text-muted-foreground"
                                   >
                                     <div 
-                                      class="flex items-center justify-between w-full py-1.5 px-2 hover:bg-muted/50 rounded-md transition-colors cursor-pointer"
-                                      @click="toggleTable(tableName)"
+                                      class="flex items-center justify-between w-full py-1.5 px-2 hover:bg-muted/50 rounded-md transition-colors"
+                                      :class="conn.id === currentConnectionId ? 'cursor-pointer' : 'cursor-default opacity-80'"
+                                      @click="conn.id === currentConnectionId ? toggleTable(String(schemaName), tableName) : null"
                                     >
                                       <div class="flex items-center gap-2 overflow-hidden">
                                         <ChevronRight 
                                           class="w-3 h-3 transition-transform duration-200"
-                                          :class="{ 'rotate-90': expandedTables.has(tableName) }"
+                                          :class="{ 'rotate-90': expandedTables.has(getTableKey(String(schemaName), tableName)) }"
                                         />
                                         <Table class="w-3 h-3 shrink-0" />
                                         <span class="truncate">{{ tableName }}</span>
                                       </div>
                                       
-                                      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <div v-if="conn.id === currentConnectionId" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <button 
                                           class="p-1 hover:bg-destructive/10 hover:text-destructive rounded-sm transition-colors"
                                           @click.stop="emit('remove-table', tableName)"
@@ -321,9 +415,9 @@ const getAvailableTables = (tables: string[]) => {
                                     </div>
                                   
                                     <!-- Columns List -->
-                                    <div v-if="expandedTables.has(tableName) && props.tablesData?.[tableName]" class="pl-5 mt-1 space-y-0.5 border-l border-border/50 ml-1.5">
+                                    <div v-if="expandedTables.has(getTableKey(String(schemaName), tableName)) && getTablesDataForConnection(conn.id)?.[tableName]" class="pl-5 mt-1 space-y-0.5 border-l border-border/50 ml-1.5 max-h-48 overflow-auto pr-2">
                                       <div 
-                                        v-for="col in props.tablesData[tableName]" 
+                                        v-for="col in getTablesDataForConnection(conn.id)![tableName]" 
                                         :key="col.name"
                                         class="flex items-center gap-2 text-xs py-1 text-muted-foreground relative group/col"
                                       >
@@ -346,36 +440,37 @@ const getAvailableTables = (tables: string[]) => {
                                   <ChevronRight class="w-3 h-3 transition-transform duration-200" :class="{ 'rotate-90': isUnaddedOpen }" />
                                   {{ t('sidebar.unadded') }}
                                 </div>
-                                <div v-show="isUnaddedOpen">
+                                <div v-show="isUnaddedOpen" class="max-h-[40vh] overflow-auto pr-2">
                                   <div
                                     v-for="tableName in getAvailableTables(schema.tables)"
                                     :key="`${schemaName}:${tableName}`"
                                     class="group flex flex-col transition-colors rounded-md text-muted-foreground"
-                                    draggable="true"
-                                    @dragstart="onDragStart($event, tableName)"
+                                    :draggable="conn.id === currentConnectionId"
+                                    @dragstart="conn.id === currentConnectionId ? onDragStart($event, tableName, String(schemaName)) : null"
                                   >
                                     <div 
-                                      class="py-1.5 px-2 flex items-center justify-between cursor-pointer w-full hover:bg-muted/50 rounded-md transition-colors"
-                                      @click.stop="toggleTable(tableName)"
+                                      class="py-1.5 px-2 flex items-center justify-between max-w-80 hover:bg-muted/50 rounded-md transition-colors"
+                                      :class="conn.id === currentConnectionId ? 'cursor-pointer' : 'cursor-default opacity-80'"
+                                      @click.stop="conn.id === currentConnectionId ? toggleTable(String(schemaName), tableName) : null"
                                     >
                                       <div class="flex items-center gap-2 overflow-hidden">
                                         <ChevronRight 
                                           class="w-3 h-3 transition-transform duration-200"
-                                          :class="{ 'rotate-90': expandedTables.has(tableName) }"
+                                          :class="{ 'rotate-90': expandedTables.has(getTableKey(String(schemaName), tableName)) }"
                                         />
                                         <Table class="w-3 h-3 shrink-0" />
                                         <span class="truncate" :title="tableName">{{ tableName }}</span>
                                       </div>
                                       
-                                      <div class="flex items-center" @click.stop="emit('add-table', tableName)">
+                                      <div v-if="conn.id === currentConnectionId" class="flex items-center" @click.stop="emit('add-table', { tableName, schemaName: String(schemaName) })">
                                         <Plus class="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity hover:scale-125" />
                                       </div>
                                     </div>
 
                                     <!-- Columns List -->
-                                    <div v-if="expandedTables.has(tableName) && props.tablesData?.[tableName]" class="pl-7 pb-1 space-y-0.5 border-l border-border/50 ml-3.5 mb-1">
+                                    <div v-if="expandedTables.has(getTableKey(String(schemaName), tableName)) && getTablesDataForConnection(conn.id)?.[tableName]" class="pl-7 pb-1 space-y-0.5 border-l border-border/50 ml-3.5 mb-1 max-h-48 overflow-auto pr-2">
                                       <div 
-                                        v-for="col in props.tablesData[tableName]" 
+                                        v-for="col in getTablesDataForConnection(conn.id)![tableName]" 
                                         :key="col.name"
                                         class="flex items-center gap-2 text-xs py-0.5 text-muted-foreground/70 relative group/col"
                                       >
@@ -390,6 +485,10 @@ const getAvailableTables = (tables: string[]) => {
                             </div>
                           </Transition>
                         </div>
+                      </div>
+                      <div v-else-if="conn.id === currentConnectionId" class="py-2 px-2 text-sm text-muted-foreground flex items-center gap-2">
+                        <Loader2 class="w-3 h-3 animate-spin" />
+                        {{ t('sidebar.loadingMetadata') || 'Loading...' }}
                       </div>
                       <div v-else class="py-2 px-2 text-sm text-muted-foreground">
                         {{ t('sidebar.connectToSeeTables') }}
@@ -425,11 +524,28 @@ const getAvailableTables = (tables: string[]) => {
                 <Settings class="h-4 w-4" />
                 <span>{{ t('sidebar.patternConfig') }}</span>
               </Button>
+              <Button 
+                variant="ghost" 
+                class="w-full justify-start gap-2 h-9 px-2 font-normal text-muted-foreground hover:text-foreground"
+                :class="{ 'bg-accent text-foreground': isAIRelationshipPanelOpen }"
+                @click="emit('open-ai-relationship')"
+              >
+                <BrainCircuit class="h-4 w-4" />
+                <span>AI 关系识别</span>
+              </Button>
 
             </AccordionContent>
           </AccordionItem>
         </Accordion>
       </ScrollArea>
+    </div>
+
+    <div
+      v-if="isOpen"
+      class="absolute top-0 right-0 translate-x-1/2 h-full w-2 cursor-col-resize z-50 group/resize"
+      @pointerdown.prevent="startResize"
+    >
+      <div class="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-border group-hover/resize:bg-primary/40 transition-colors" />
     </div>
   </div>
 </template>
