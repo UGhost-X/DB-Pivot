@@ -52,6 +52,13 @@ export default defineEventHandler(async (event) => {
         const { sourceTable, sourceColumn, targetTable, targetColumn } = candidate
         
         try {
+          const sCol = String(sourceColumn || '').toLowerCase()
+          const tCol = String(targetColumn || '').toLowerCase()
+          const isGeneric = (n: string) => n === 'id' || n === 'uuid' || n === 'code' || n === 'no' || n === 'key'
+          if (isGeneric(sCol) && isGeneric(tCol)) {
+            return { ...candidate, indScore: 0, sampleSize: 0 }
+          }
+
           // Query to check inclusion: Count(Distinct Source) and Count(Source Intersect Target)
           // We limit the source sample size for performance
           

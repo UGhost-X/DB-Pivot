@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, BrainCircuit, Plus, Check, ArrowRight, Database } from 'lucide-vue-next'
+import { Loader2, BrainCircuit, Plus, Check, ArrowDown, Database } from 'lucide-vue-next'
 import { BinderDiscovery, type RelationshipCandidate, type Table } from '@/utils/binder'
 import type { Node, Edge } from '@vue-flow/core'
 import { toast } from 'vue-sonner'
@@ -226,7 +226,7 @@ const getConfidenceColor = (score: number) => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+  <div class="flex flex-col h-full">
     <div class="p-4 border-b border-border">
       <div class="flex items-center justify-between mb-2">
         <h2 class="text-lg font-semibold flex items-center gap-2">
@@ -252,9 +252,6 @@ const getConfidenceColor = (score: number) => {
           </svg>
         </Button>
       </div>
-      <p class="text-xs text-muted-foreground mb-4">
-        基于 BINDer 算法思想，智能分析表结构与命名规范，发现潜在的数据关联。
-      </p>
 
       <div class="space-y-4">
         <div class="space-y-2">
@@ -313,19 +310,20 @@ const getConfidenceColor = (score: number) => {
             </div>
           </div>
           
-          <div class="flex items-center gap-2 text-sm mb-2 w-full">
-            <div class="bg-muted px-2 py-1 rounded text-xs font-mono truncate flex-1 min-w-0" :title="`${candidate.sourceTable}.${candidate.sourceColumn}`">
-              {{ candidate.sourceTable }}.{{ candidate.sourceColumn }}
-            </div>
-            <ArrowRight class="w-3 h-3 text-muted-foreground flex-shrink-0" />
-            <div class="bg-muted px-2 py-1 rounded text-xs font-mono truncate flex-1 min-w-0" :title="`${candidate.targetTable}.${candidate.targetColumn}`">
-              {{ candidate.targetTable }}.{{ candidate.targetColumn }}
-            </div>
+        <div class="flex flex-col items-center  gap-1 w-full -mr-10">
+          <div class="bg-muted px-2 py-1 rounded text-xs font-mono truncate flex-1 min-w-0 w-full max-w-full text-center" 
+              :title="`${candidate.sourceTable}.${candidate.sourceColumn}`">
+            {{ candidate.sourceTable }}.{{ candidate.sourceColumn }}
           </div>
-          
-          <div class="text-xs text-muted-foreground">
+          <ArrowDown class="w-4 h-4 text-primary/80 flex-shrink-0 transition-all duration-200 hover:text-primary hover:scale-110" />
+          <div class="bg-muted px-2 py-1 rounded text-xs font-mono truncate flex-1 min-w-0 w-full max-w-full text-center" 
+              :title="`${candidate.targetTable}.${candidate.targetColumn}`">
+            {{ candidate.targetTable }}.{{ candidate.targetColumn }}
+          </div>
+          <div class="text-xs text-muted-foreground mt-1 text-center w-full px-2">
             {{ candidate.reason }}
           </div>
+        </div>
           
           <div class="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground/80 mt-2 pt-2 border-t border-border/50" v-if="candidate.breakdown">
             <div class="flex items-center gap-1">

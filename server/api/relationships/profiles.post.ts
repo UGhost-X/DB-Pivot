@@ -1,10 +1,12 @@
 import prisma from '../../utils/prisma'
 import knex from 'knex'
+import { BloomFilter } from '../../utils/bloomFilter'
 
 type ProfileResult = {
   sampleValues: any[]
   sampleDistinctRatio?: number
   strategy?: string
+  bloomFilter?: string
 }
 
 type ColumnKey = `${string}::${string}`
@@ -118,6 +120,7 @@ export default defineEventHandler(async (event) => {
       const tableProfiles = profiles[r.tableName] ?? (profiles[r.tableName] = {})
       tableProfiles[r.columnName] = {
         sampleValues: cachedSamples,
+        bloomFilter: typeof cached.bloomFilter === 'string' ? cached.bloomFilter : undefined,
         strategy: 'cache',
       }
     } else {
@@ -272,7 +275,7 @@ export default defineEventHandler(async (event) => {
 
   const computeProfile = async (tableName: string, columnName: string, rowEstimate: number | null): Promise<{
     profile: ProfileResult
-    persist: { sampleValues: any[] } | null
+    persist: { sampleValues: any[]; bloomFilter?: string } | null
   }> => {
     const qt = quoteTableRef(tableName)
     const qc = quoteIdent(columnName)
@@ -414,13 +417,25 @@ export default defineEventHandler(async (event) => {
       nonNullSampleCount > 0 ? clamp(sampleValues.length / nonNullSampleCount, 0, 1) : 0
     const shouldPersist = sampleDistinctRatio >= parsedPersistThreshold
 
+    let bloomFilterBase64: string | undefined
+    if (shouldPersist && sampleRows.length > 0) {
+      const bf = new BloomFilter(100000, 5)
+      for (const r of sampleRows) {
+        if (r?.v !== null && r?.v !== undefined) {
+          bf.add(String(r.v))
+        }
+      }
+      bloomFilterBase64 = bf.export()
+    }
+
     return {
       profile: {
         sampleValues,
         sampleDistinctRatio,
         strategy: 'sample',
+        bloomFilter: bloomFilterBase64
       },
-      persist: shouldPersist ? { sampleValues } : null
+      persist: shouldPersist ? { sampleValues, bloomFilter: bloomFilterBase64 } : null
     }
   }
 
@@ -451,10 +466,12 @@ export default defineEventHandler(async (event) => {
               tableName,
               columnName,
               sampleValues: persist.sampleValues,
+              bloomFilter: persist.bloomFilter,
               lastUpdated: new Date(),
             },
             update: {
               sampleValues: persist.sampleValues,
+              bloomFilter: persist.bloomFilter,
               lastUpdated: new Date(),
             }
           })

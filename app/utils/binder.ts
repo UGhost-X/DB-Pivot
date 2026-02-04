@@ -1,3 +1,5 @@
+import { BloomFilter } from './bloomFilter'
+
 // ----------------------
 // 1. 定义基础数据结构
 // ----------------------
@@ -5,6 +7,7 @@
 export interface ColumnProfile {
   sampleValues: any[]
   sampleDistinctRatio?: number
+  bloomFilter?: string
 }
 
 export interface Column {
@@ -56,7 +59,7 @@ export class BinderDiscovery {
         if (sourceTable.name === targetTable.name) continue
 
         // 预处理：将表名标准化（去除复数、转小写）
-        const targetTableTokens = this.tokenize(targetTable.name) 
+        const targetTableTokens = this.tokenizeTableName(targetTable.name)
         // 例如 users -> [user]
 
         for (const sourceCol of sourceTable.columns) {
@@ -117,10 +120,10 @@ export class BinderDiscovery {
   ): { total: number, name: number, data: number, type: number } {
     
     // A. 名称评分（只看 “字段名 ↔ 目标表名/主键特征”，不做 “字段名 ↔ 字段名” 相似度）
-    const nameScore = this.evaluateNameSimilarity(sCol.name, tCol.name, tTableTokens, tTableName);
+    const nameScore = this.evaluateNameSimilarity(sCol.name, tCol, tTableTokens, tTableName);
     
     // B. 数据评分（值包含 / 重叠）- 没有数据画像时不参与打分
-    const dataScore = this.evaluateDataContent(sCol, tCol);
+    const rawDataScore = this.evaluateDataContent(sCol, tCol);
     
     // C. 类型评分 (作为系数)
     // 已经通过硬过滤，这里给微小的加分
@@ -128,8 +131,24 @@ export class BinderDiscovery {
 
     // 加权总分：以值关联为主，表名↔字段为辅
     let total = 0;
+    let dataScore = rawDataScore;
     if (sCol.profile && tCol.profile) {
-      total = (nameScore * 0.15) + (dataScore * 0.85);
+      const sourceIsGenericId = this.isGenericIdentifierName(sCol.name);
+      const targetIsGenericId = this.isGenericIdentifierName(tCol.name);
+      if (sourceIsGenericId && targetIsGenericId) {
+        dataScore = 0;
+      }
+
+      const hasTableHint = this.columnHasTargetTableHint(sCol.name, tTableTokens);
+      if (!hasTableHint && nameScore < 0.6) {
+        dataScore = dataScore * 0.15;
+      }
+
+      if (nameScore < 0.3) {
+        dataScore = dataScore * 0.1;
+      }
+
+      total = (nameScore * 0.4) + (dataScore * 0.6);
       
       if (dataScore > 0.95 && nameScore > 0.6) {
         total = Math.min(1.0, total + 0.05);
@@ -143,23 +162,25 @@ export class BinderDiscovery {
 
   // --- 维度 1: 智能名称匹配 ---
   
-  private evaluateNameSimilarity(sColName: string, tColName: string, tTableTokens: string[], tTableName: string): number {
+  private evaluateNameSimilarity(sColName: string, tCol: Column, tTableTokens: string[], tTableName: string): number {
     const sName = sColName.toLowerCase();
-    const tName = tColName.toLowerCase();
+    const tName = tCol.name.toLowerCase();
+    if (sName === tName) return 0;
     
-    // 目标列必须看起来像 ID
-    const tIsId = tName === 'id' || tName === 'code' || tName === 'no' || tName === 'uuid' || tName === 'key' || tName.endsWith('_id');
-    if (!tIsId) return 0;
+    const tKeySuffix = this.extractKeySuffix(tName) ?? (tCol.isPrimaryKey ? 'id' : null)
+    if (!tKeySuffix) return 0;
+    if (this.isGenericIdentifierName(sColName)) return 0;
 
     // 1. 严格表名匹配 (users -> user_id, user_orders -> user_order_id)
-    const tTableNameSimple = tTableName.toLowerCase().replace(/s$/, ''); // users -> user
-    const exactMatch = `${tTableNameSimple}_id`;
-    const exactMatchNoUnderscore = `${tTableNameSimple}id`;
+    const normalizedTokens = tTableTokens.length > 0 ? tTableTokens : this.tokenizeTableName(tTableName)
+    const tTableNameSimple = normalizedTokens.length > 0 ? normalizedTokens.join('_') : tTableName.toLowerCase().replace(/s$/, '');
+    const exactMatch = `${tTableNameSimple}_${tKeySuffix}`;
+    const exactMatchNoUnderscore = `${tTableNameSimple}${tKeySuffix}`;
 
     if (sName === exactMatch || sName === exactMatchNoUnderscore) return 1.0;
 
     // 2. 表名作为前缀匹配 (users -> user_uuid, user_key)
-    if (sName.startsWith(tTableNameSimple + '_') && (sName.endsWith('id') || sName.endsWith('code') || sName.endsWith('key'))) {
+    if (sName.startsWith(tTableNameSimple + '_') && sName.endsWith(tKeySuffix)) {
       return 0.95;
     }
 
@@ -186,16 +207,16 @@ export class BinderDiscovery {
     }
 
     const isFullTokenMatch = matchCount === tTableTokens.length;
-    const sHasId = sName.endsWith('id') || sName.endsWith('code') || sName.endsWith('key');
+    const sHasKey = this.extractKeySuffix(sName) !== null
 
-    if (isFullTokenMatch && sHasId) {
+    if (isFullTokenMatch && sHasKey) {
       return 0.9;
     }
     
     // 4. 弱匹配：目标表名很短（单词），且源字段包含该词
     // e.g. target: "users", source: "creator_id" (no match), "user_creator_id" (match)
     // 防止长表名拆分后的误判，这里只允许单词表名的包含匹配
-    if (tTableTokens.length === 1 && tTableTokens[0] && sTokens.includes(tTableTokens[0]!) && sHasId) {
+    if (tTableTokens.length === 1 && tTableTokens[0] && sTokens.includes(tTableTokens[0]!) && sHasKey) {
        // 这是一个中等信号，需要数据支撑
        return 0.6;
     }
@@ -207,6 +228,35 @@ export class BinderDiscovery {
 
   private evaluateDataContent(sCol: Column, tCol: Column): number {
     if (!sCol.profile || !tCol.profile) return 0.0;
+    if (this.isGenericIdentifierName(sCol.name) && this.isGenericIdentifierName(tCol.name)) return 0.0;
+
+    if (tCol.profile.bloomFilter && sCol.profile.sampleValues.length > 0) {
+      try {
+        const bf = new BloomFilter(100000, 5, tCol.profile.bloomFilter);
+        let matchCount = 0;
+        let validSamples = 0;
+
+        for (const val of sCol.profile.sampleValues) {
+          if (val === null || val === undefined || val === '') continue;
+          validSamples++;
+          if (bf.test(String(val))) {
+            matchCount++;
+          }
+        }
+
+        if (validSamples === 0) return 0;
+        
+        const inclusionRatio = matchCount / validSamples;
+
+        const sName = sCol.name.toLowerCase();
+        const sLooksLikeKey = sName.endsWith('id') || sName.endsWith('code') || sName.endsWith('no') || sName.endsWith('uuid') || sName.endsWith('key');
+        if (!sLooksLikeKey && validSamples < 10) return inclusionRatio * 0.4;
+        if (validSamples < 3) return inclusionRatio * 0.5;
+
+        return inclusionRatio;
+      } catch {
+      }
+    }
 
     const sSamples = new Set(sCol.profile.sampleValues.map(String));
     const tSamples = new Set(tCol.profile.sampleValues.map(String));
@@ -250,6 +300,37 @@ export class BinderDiscovery {
       .split(/[^a-z0-9]/)
       .filter(s => s.length > 0)
       .map(s => s.replace(/s$/, '')); // 简单的去复数处理 users->user
+  }
+
+  private tokenizeTableName(tableName: string): string[] {
+    const tokens = this.tokenize(tableName)
+    const stop = new Set(['sys', 'tbl', 'table', 't', 'dim', 'ref', 'biz', 'app', 'base', 'core'])
+    const filtered = tokens.filter((t) => t && !stop.has(t))
+    return filtered.length > 0 ? filtered : tokens
+  }
+
+  private extractKeySuffix(name: string): 'id' | 'code' | 'no' | 'uuid' | 'key' | null {
+    const n = String(name).toLowerCase()
+    if (/(?:^|_)id$/.test(n)) return 'id'
+    if (/(?:^|_)code$/.test(n)) return 'code'
+    if (/(?:^|_)no$/.test(n)) return 'no'
+    if (/(?:^|_)uuid$/.test(n)) return 'uuid'
+    if (/(?:^|_)key$/.test(n)) return 'key'
+    return null
+  }
+
+  private isGenericIdentifierName(name: string): boolean {
+    const n = String(name).toLowerCase()
+    return n === 'id' || n === 'uuid' || n === 'code' || n === 'no' || n === 'key'
+  }
+
+  private columnHasTargetTableHint(columnName: string, targetTableTokens: string[]): boolean {
+    const tokens = this.tokenize(columnName)
+    const tokenSet = new Set(tokens.filter((t) => t && t !== 'id' && t !== 'uuid' && t !== 'code' && t !== 'no' && t !== 'key'))
+    for (const t of targetTableTokens) {
+      if (t && tokenSet.has(t)) return true
+    }
+    return false
   }
 
   private isTypeCompatible(typeA: string, typeB: string): boolean {

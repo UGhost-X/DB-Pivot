@@ -229,6 +229,7 @@ model ColumnProfile {
   columnName   String
 
   sampleValues Json
+  bloomFilter  String?
 
   lastUpdated DateTime @default(now())
 

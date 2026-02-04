@@ -244,12 +244,13 @@ const getAvailableTables = (tables: string[]) => {
 <template>
   <div 
     ref="sidebarEl"
-    class="flex flex-col border-r bg-card h-full relative z-20 shrink-0"
+    class="flex flex-col border-r bg-card h-full relative z-20 shrink-0 " 
     :class="[
       isResizing ? 'transition-none' : 'transition-all duration-300 ease-in-out',
       isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-full border-r-0 overflow-hidden'
     ]"
-    :style="isOpen ? { width: `${width}px` } : { width: '0px' }"
+    :style="isOpen ? { width: `${width}px`} : { width: '0px' }"
+    
   >
     <div class="flex flex-col h-full w-full">
       <!-- Header -->
@@ -266,12 +267,12 @@ const getAvailableTables = (tables: string[]) => {
       </div>
 
       <!-- Content -->
-      <ScrollArea class="flex-1 w-full">
-        <Accordion type="multiple" :default-value="['connections', 'tools']" class="w-full">
+      <ScrollArea class="flex-1">
+        <Accordion type="multiple" :default-value="['connections', 'tools']">
 
            <!-- Connections -->
            <AccordionItem value="connections" class="border-b-0">
-            <AccordionTrigger class="px-4 py-2 hover:no-underline hover:bg-muted/50 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+            <AccordionTrigger class="px-4 py-2 hover:no-underline hover:bg-muted/50 text-xs font-bold text-muted-foreground uppercase tracking-wider ">
               <div class="flex items-center justify-between w-full pr-2">
                 <span>{{ t('sidebar.connections') }}</span>
                 <Button variant="ghost" size="icon" class="h-6 w-6 ml-2" @click.stop="emit('add-connection')">
@@ -279,7 +280,7 @@ const getAvailableTables = (tables: string[]) => {
                 </Button>
               </div>
             </AccordionTrigger>
-            <AccordionContent class="px-2 pb-2">
+            <AccordionContent class="pl-2 pb-2">
               <div class="space-y-1">
                 <div 
                   v-for="conn in savedConnections" 
@@ -288,7 +289,7 @@ const getAvailableTables = (tables: string[]) => {
                   @contextmenu.prevent="emit('connection-context-menu', { event: $event, conn })"
                 >
                   <div
-                    class="p-2 rounded-md text-sm cursor-pointer transition-colors relative group hover:bg-muted/50"
+                    class="p-2 rounded-md text-sm cursor-pointer transition-colors relative group hover:bg-muted/50 pr-2"
                     :class="currentConnectionId === conn.id ? 'text-foreground' : 'text-muted-foreground'"
                     @click="emit('select-connection', conn); toggleConnection(conn.id)"
                     @vue:mounted="ensureExpanded(conn.id)"
@@ -346,7 +347,7 @@ const getAvailableTables = (tables: string[]) => {
                     leave-from-class="max-h-[1200px] opacity-100"
                     leave-to-class="max-h-0 opacity-0"
                   >
-                    <div v-show="expandedConnections[conn.id]" class="pl-6 pr-2 pb-1 overflow-hidden">
+                    <div v-show="expandedConnections[conn.id]" class="pl-6 pr-2 pb-1 overflow-hidden" :style="{ width: `${width-10}px` }">
                       <div v-if="getSchemasForConnection(conn.id)" class="space-y-1">
                         <div
                           v-for="(schema, schemaName) in getSchemasForConnection(conn.id)"
@@ -394,7 +395,7 @@ const getAvailableTables = (tables: string[]) => {
                                       :class="conn.id === currentConnectionId ? 'cursor-pointer' : 'cursor-default opacity-80'"
                                       @click="conn.id === currentConnectionId ? toggleTable(String(schemaName), tableName) : null"
                                     >
-                                      <div class="flex items-center gap-2 overflow-hidden flex-1 min-w-0" :style="{ width: `${width}px` }">
+                                      <div class="flex items-center gap-2">
                                         <ChevronRight 
                                           class="w-3 h-3 transition-transform duration-200"
                                           :class="{ 'rotate-90': expandedTables.has(getTableKey(String(schemaName), tableName)) }"
