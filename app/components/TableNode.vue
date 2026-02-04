@@ -17,6 +17,10 @@ const props = defineProps<{
       isForeignKey?: boolean; 
       nullable?: boolean; 
       isHidden?: boolean;
+      profile?: {
+        sampleValues: any[];
+        sampleDistinctRatio?: number;
+      };
       highlightType?: 'source' | 'target' | null;
       highlightColor?: string;
       isConnectedSource?: boolean;
@@ -219,6 +223,13 @@ const getTypeIcon = (type: string) => {
           <span class="truncate text-foreground font-medium" :class="{ 'font-semibold': col.isPrimaryKey }" :title="col.name">
             {{ col.name }}
             <span v-if="col.nullable" class="text-muted-foreground font-normal">?</span>
+          </span>
+          <span
+            v-if="col.profile"
+            class="ml-2 shrink-0 text-[10px] font-mono text-muted-foreground/70"
+            :title="`样本数: ${(col.profile?.sampleValues?.length ?? 0)}${typeof col.profile?.sampleDistinctRatio === 'number' ? `, 去重比: ${Math.round(col.profile.sampleDistinctRatio * 100)}%` : ''}`"
+          >
+            S{{ col.profile?.sampleValues?.length ?? 0 }}
           </span>
         </div>
 

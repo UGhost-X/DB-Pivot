@@ -154,7 +154,7 @@ const toggleTable = (schemaName: string, tableName: string) => {
 
 const sidebarEl = ref<HTMLDivElement | null>(null)
 const isResizing = ref(false)
-const RESIZE_MIN_PX = 220
+const RESIZE_MIN_PX = 200
 const RESIZE_MAX_PX = 560
 let resizePointerId: number | null = null
 let resizeStartX = 0
@@ -266,8 +266,8 @@ const getAvailableTables = (tables: string[]) => {
       </div>
 
       <!-- Content -->
-      <ScrollArea class="flex-1">
-        <Accordion type="multiple" class="w-full" :default-value="['connections', 'tools']">
+      <ScrollArea class="flex-1 w-full">
+        <Accordion type="multiple" :default-value="['connections', 'tools']" class="w-full">
 
            <!-- Connections -->
            <AccordionItem value="connections" class="border-b-0">
@@ -293,7 +293,7 @@ const getAvailableTables = (tables: string[]) => {
                     @click="emit('select-connection', conn); toggleConnection(conn.id)"
                     @vue:mounted="ensureExpanded(conn.id)"
                   >
-                    <div class="flex items-center gap-2 min-w-0 pr-6">
+                    <div class="flex items-center gap-2  pr-6">
                       <ChevronRight
                         class="h-4 w-4 shrink-0 transition-transform duration-200 ease-out"
                         :class="expandedConnections[conn.id] ? 'rotate-90' : ''"
@@ -383,7 +383,7 @@ const getAvailableTables = (tables: string[]) => {
                                   <ChevronRight class="w-3 h-3 transition-transform duration-200" :class="{ 'rotate-90': isAddedOpen }" />
                                   {{ t('sidebar.added') }}
                                 </div>
-                                <div v-show="isAddedOpen" class="max-h-[40vh] overflow-auto pr-2">
+                                <div v-show="isAddedOpen" class="max-h-[40vh] overflow-auto pr-2 w-full">
                                   <div
                                     v-for="tableName in getAddedTables(schema.tables)"
                                     :key="`${schemaName}:${tableName}`"
@@ -394,7 +394,7 @@ const getAvailableTables = (tables: string[]) => {
                                       :class="conn.id === currentConnectionId ? 'cursor-pointer' : 'cursor-default opacity-80'"
                                       @click="conn.id === currentConnectionId ? toggleTable(String(schemaName), tableName) : null"
                                     >
-                                      <div class="flex items-center gap-2 overflow-hidden">
+                                      <div class="flex items-center gap-2 overflow-hidden flex-1 min-w-0" :style="{ width: `${width}px` }">
                                         <ChevronRight 
                                           class="w-3 h-3 transition-transform duration-200"
                                           :class="{ 'rotate-90': expandedTables.has(getTableKey(String(schemaName), tableName)) }"
@@ -440,7 +440,7 @@ const getAvailableTables = (tables: string[]) => {
                                   <ChevronRight class="w-3 h-3 transition-transform duration-200" :class="{ 'rotate-90': isUnaddedOpen }" />
                                   {{ t('sidebar.unadded') }}
                                 </div>
-                                <div v-show="isUnaddedOpen" class="max-h-[40vh] overflow-auto pr-2">
+                                <div v-show="isUnaddedOpen" class="max-h-[40vh]  overflow-auto pr-2 w-full" >
                                   <div
                                     v-for="tableName in getAvailableTables(schema.tables)"
                                     :key="`${schemaName}:${tableName}`"
@@ -449,11 +449,11 @@ const getAvailableTables = (tables: string[]) => {
                                     @dragstart="conn.id === currentConnectionId ? onDragStart($event, tableName, String(schemaName)) : null"
                                   >
                                     <div 
-                                      class="py-1.5 px-2 flex items-center justify-between max-w-80 hover:bg-muted/50 rounded-md transition-colors"
+                                      class="py-1.5 px-2 flex items-center justify-between w-full hover:bg-muted/50 rounded-md transition-colors"
                                       :class="conn.id === currentConnectionId ? 'cursor-pointer' : 'cursor-default opacity-80'"
                                       @click.stop="conn.id === currentConnectionId ? toggleTable(String(schemaName), tableName) : null"
                                     >
-                                      <div class="flex items-center gap-2 overflow-hidden">
+                                      <div class="flex items-center gap-2 overflow-hidden flex-1 min-w-0" :style="{ maxWidth: `${width - 100}px` }">
                                         <ChevronRight 
                                           class="w-3 h-3 transition-transform duration-200"
                                           :class="{ 'rotate-90': expandedTables.has(getTableKey(String(schemaName), tableName)) }"
@@ -542,7 +542,7 @@ const getAvailableTables = (tables: string[]) => {
 
     <div
       v-if="isOpen"
-      class="absolute top-0 right-0 translate-x-1/2 h-full w-2 cursor-col-resize z-50 group/resize"
+      class="absolute top-0 right-0 translate-x-1/2 h-full w-2 cursor-ew-resize z-50 group/resize "
       @pointerdown.prevent="startResize"
     >
       <div class="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-border group-hover/resize:bg-primary/40 transition-colors" />

@@ -300,8 +300,14 @@ export const useI18n = () => {
     setLocale(locale.value === 'zh' ? 'en' : 'zh')
   }
 
-  const t = (key: string, params?: Record<string, string | number>) => {
-    const template = dictionaries[locale.value]?.[key] ?? dictionaries.en[key] ?? key
+  const t = (
+    key: string,
+    paramsOrFallback?: Record<string, string | number> | string,
+    fallback?: string,
+  ) => {
+    const params = typeof paramsOrFallback === 'string' ? undefined : paramsOrFallback
+    const fb = typeof paramsOrFallback === 'string' ? paramsOrFallback : fallback
+    const template = dictionaries[locale.value]?.[key] ?? dictionaries.en[key] ?? fb ?? key
     if (!params) return template
     return template.replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? `{${name}}`))
   }

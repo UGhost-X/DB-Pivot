@@ -67,10 +67,14 @@ async function getTableList(client: any, type: string, database: string) {
   return rows
     .map((row) => {
       const keys = Object.keys(row)
-      const tableName = row[keys[0]]
-      const tableType = row[keys[1]]
+      const tableNameKey = keys[0]
+      const tableTypeKey = keys[1]
+      if (!tableNameKey || !tableTypeKey) return null
+      const tableName = row[tableNameKey]
+      const tableType = row[tableTypeKey]
       return { table_schema: 'public', table_name: tableName, table_type: tableType }
     })
+    .filter((row): row is { table_schema: string; table_name: string; table_type: string } => Boolean(row))
     .filter((row) => row.table_name && (row.table_type === 'BASE TABLE' || row.table_type === 'VIEW'))
 }
 

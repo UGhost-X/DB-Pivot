@@ -101,9 +101,10 @@ const deleteSavedView = async () => {
   contextMenu.value.visible = false
   
   try {
-    const { success, error } = await $fetch(`/api/saved-views/${view.id}`, {
+    const res: { success?: boolean; error?: string } = await $fetch(`/api/saved-views/${view.id}`, {
       method: 'DELETE'
     })
+    const { success, error } = res
 
     if (success) {
       // Remove from list
@@ -151,12 +152,13 @@ const fetchSavedViews = async (projectId: number) => {
   loadingSavedViews.value = { ...loadingSavedViews.value, [projectId]: true }
   
   try {
-    const { success, data } = await $fetch('/api/saved-views', {
+    const res: { success?: boolean; data?: any[]; error?: string } = await $fetch('/api/saved-views', {
       params: { projectId }
     })
+    const { success, data } = res
     
     if (success) {
-      projectSavedViews.value = { ...projectSavedViews.value, [projectId]: data }
+      projectSavedViews.value = { ...projectSavedViews.value, [projectId]: data ?? [] }
     }
   } catch (e) {
     console.error(e)
@@ -343,7 +345,7 @@ onMounted(() => {
                       <div v-if="loadingSavedViews[p.id]" class="text-[10px] text-muted-foreground py-1 px-2">
                         {{ t('projects.loading') }}
                       </div>
-                      <div v-else-if="!projectSavedViews[p.id] || projectSavedViews[p.id].length === 0" class="text-[10px] text-muted-foreground py-1 px-2">
+                      <div v-else-if="(projectSavedViews[p.id]?.length ?? 0) === 0" class="text-[10px] text-muted-foreground py-1 px-2">
                         {{ t('projects.empty') }}
                       </div>
                       <template v-else>

@@ -89,7 +89,6 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -107,7 +106,7 @@ const deleteTargetId = ref<number | null>(null)
 
 const loadViews = async () => {
   try {
-    const { success, data, error } = await $fetch('/api/saved-views', {
+    const { success, data, error } = await $fetch<{ success: boolean; data: any[]; error?: string }>('/api/saved-views', {
       params: { projectId: route.query.projectId }
     })
     
@@ -128,7 +127,7 @@ const formatDate = (dateStr: string) => {
 
 const deleteView = async (id: number) => {
   try {
-    const { success, error } = await $fetch(`/api/saved-views/${id}`, {
+    const { success, error } = await $fetch<{ success: boolean; error?: string }>(`/api/saved-views/${id}`, {
       method: 'DELETE'
     })
 

@@ -19,16 +19,19 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'add-edges', edges: any[]): void
+  (e: 'apply-profiles', profiles: Record<string, Record<string, any>>): void
   (e: 'close'): void
 }>()
 
 const isAnalyzing = ref(false)
 const isDeepAnalysis = ref(false)
 const threshold = ref([50]) // 0-100
+const profilePersistThreshold = ref([5])
 const candidates = ref<RelationshipCandidate[]>([])
 const selectedIndices = ref<Set<number>>(new Set())
 
 const thresholdValue = computed(() => (threshold.value[0] ?? 50) / 100)
+const profilePersistThresholdValue = computed(() => (profilePersistThreshold.value[0] ?? 5) / 100)
 
 const runAnalysis = async () => {
   isAnalyzing.value = true
@@ -38,12 +41,43 @@ const runAnalysis = async () => {
   // Simulate async for UI responsiveness
   setTimeout(async () => {
     try {
-      const tables: Table[] = props.nodes
+      let tables: Table[] = props.nodes
         .filter(n => n.type === 'table' && n.data?.columns)
         .map(n => ({
           name: n.data.label,
           columns: n.data.columns
         }))
+
+      if (props.connectionId) {
+        try {
+          const profileRes = await $fetch<any>('/api/relationships/profiles', {
+            method: 'POST',
+            body: {
+              connectionId: props.connectionId,
+              tables: tables.map(t => ({
+                tableName: t.name,
+                columns: (t.columns || []).map((c: any) => c.name)
+              })),
+              sampleSize: 100,
+              persistDistinctRatioThreshold: profilePersistThresholdValue.value
+            }
+          })
+
+          if (profileRes?.success && profileRes?.profiles) {
+            emit('apply-profiles', profileRes.profiles)
+            tables = tables.map(t => ({
+              ...t,
+              columns: (t.columns || []).map((c: any) => ({
+                ...c,
+                profile: profileRes.profiles?.[t.name]?.[c.name] ?? c.profile
+              }))
+            }))
+          }
+        } catch (err) {
+          console.error('Profile analysis failed:', err)
+          toast.error('画像分析失败')
+        }
+      }
 
       const binder = new BinderDiscovery(tables)
       // If deep analysis is enabled, use a lower threshold for initial discovery to catch more candidates
@@ -98,7 +132,7 @@ const runAnalysis = async () => {
       }
 
       // Filter by final threshold
-      results = results.filter(r => r.confidence >= thresholdValue.value)
+      results = results.filter(r => r.confidence >= thresholdValue.value && r.confidence > 0)
 
       // Filter out existing edges
       const existingKeys = new Set(
@@ -147,6 +181,7 @@ const applySelected = () => {
   
   selectedIndices.value.forEach(index => {
     const candidate = candidates.value[index]
+    if (!candidate) return
     const sourceNode = props.nodes.find(n => n.data?.label === candidate.sourceTable)
     const targetNode = props.nodes.find(n => n.data?.label === candidate.targetTable)
 
@@ -161,7 +196,9 @@ const applySelected = () => {
         animated: true,
         data: {
           createdBy: 'ai-binder',
-          confidence: candidate.confidence
+          confidence: candidate.confidence,
+          reason: candidate.reason,
+          breakdown: candidate.breakdown
         },
         style: { stroke: '#8b5cf6', strokeWidth: 2 } // Violet color for AI edges
       })
@@ -169,8 +206,16 @@ const applySelected = () => {
   })
 
   emit('add-edges', edgesToAdd)
-  candidates.value = []
+  
+  // Remove added candidates from the list instead of clearing all
+  candidates.value = candidates.value.filter((_, i) => !selectedIndices.value.has(i))
   selectedIndices.value.clear()
+  
+  if (candidates.value.length === 0) {
+    toast.success('所有选中关系已添加')
+  } else {
+    toast.success(`已添加 ${edgesToAdd.length} 个关系`)
+  }
 }
 
 const getConfidenceColor = (score: number) => {
@@ -227,6 +272,15 @@ const getConfidenceColor = (score: number) => {
             深度数据分析 (Beta)
           </Label>
         </div>
+
+        <div class="space-y-2" v-if="connectionId">
+          <div class="flex justify-between text-sm">
+            <span>画像保存阈值</span>
+            <span class="font-medium">{{ profilePersistThreshold[0] }}%</span>
+          </div>
+          <Slider v-model="profilePersistThreshold" :max="100" :step="1" />
+          <div class="text-xs text-muted-foreground">按“去重值/采样行数”低于阈值则不写入数据库</div>
+        </div>
         
         <Button class="w-full bg-violet-600 hover:bg-violet-700 text-white" @click="runAnalysis" :disabled="isAnalyzing">
           <Loader2 v-if="isAnalyzing" class="w-4 h-4 mr-2 animate-spin" />
@@ -259,14 +313,33 @@ const getConfidenceColor = (score: number) => {
             </div>
           </div>
           
-          <div class="flex items-center gap-2 text-sm mb-2">
-            <div class="bg-muted px-2 py-1 rounded text-xs font-mono">{{ candidate.sourceTable }}.{{ candidate.sourceColumn }}</div>
-            <ArrowRight class="w-3 h-3 text-muted-foreground" />
-            <div class="bg-muted px-2 py-1 rounded text-xs font-mono">{{ candidate.targetTable }}.{{ candidate.targetColumn }}</div>
+          <div class="flex items-center gap-2 text-sm mb-2 w-full">
+            <div class="bg-muted px-2 py-1 rounded text-xs font-mono truncate flex-1 min-w-0" :title="`${candidate.sourceTable}.${candidate.sourceColumn}`">
+              {{ candidate.sourceTable }}.{{ candidate.sourceColumn }}
+            </div>
+            <ArrowRight class="w-3 h-3 text-muted-foreground flex-shrink-0" />
+            <div class="bg-muted px-2 py-1 rounded text-xs font-mono truncate flex-1 min-w-0" :title="`${candidate.targetTable}.${candidate.targetColumn}`">
+              {{ candidate.targetTable }}.{{ candidate.targetColumn }}
+            </div>
           </div>
           
           <div class="text-xs text-muted-foreground">
             {{ candidate.reason }}
+          </div>
+          
+          <div class="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground/80 mt-2 pt-2 border-t border-border/50" v-if="candidate.breakdown">
+            <div class="flex items-center gap-1">
+              <span class="opacity-70">名称得分:</span>
+              <span class="font-mono">{{ Math.round(candidate.breakdown.nameScore * 100) }}</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <span class="opacity-70">数据得分:</span>
+              <span class="font-mono">{{ Math.round(candidate.breakdown.dataScore * 100) }}</span>
+            </div>
+            <div class="w-full flex justify-between mt-1 opacity-60" v-if="candidate.sourceProfileSummary">
+               <span>源: {{ candidate.sourceProfileSummary }}</span>
+               <span>目标: {{ candidate.targetProfileSummary }}</span>
+            </div>
           </div>
         </div>
       </div>

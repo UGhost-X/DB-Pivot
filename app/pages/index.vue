@@ -109,6 +109,25 @@ const handleAddDetectedEdges = (newEdges: any[]) => {
   toast.success(`已添加 ${newEdges.length} 个关系`)
 }
 
+const handleApplyProfiles = (profiles: Record<string, Record<string, any>>) => {
+  setNodes((current) =>
+    current.map((node) => {
+      if (node.type !== 'table') return node
+      const label = (node.data as any)?.label
+      const tableProfiles = label ? profiles?.[label] : undefined
+      if (!tableProfiles) return node
+      const cols = (node.data as any)?.columns
+      if (!Array.isArray(cols)) return node
+      const nextCols = cols.map((c: any) => {
+        const p = tableProfiles?.[c?.name]
+        if (!p) return c
+        return { ...c, profile: p }
+      })
+      return { ...node, data: { ...(node.data as any), columns: nextCols } }
+    })
+  )
+}
+
 watch(isPreviewMode, (isPreview) => {
   if (!import.meta.client) return
   
@@ -2526,7 +2545,7 @@ const connectDB = async () => {
 
 const fetchTableColumns = async (tableName: string, schemaNameOverride?: string) => {
 
-  if (tables.value[tableName]?.length > 0) return
+  if ((tables.value?.[tableName]?.length ?? 0) > 0) return
 
   let schemaName = schemaNameOverride || 'public'
   if (!schemaNameOverride && metadataTree.value?.schemas) {
@@ -2552,13 +2571,13 @@ const fetchTableColumns = async (tableName: string, schemaNameOverride?: string)
         
         // Update caches
         if (currentConnectionId.value) {
-             const cached = connectionCache.value[String(currentConnectionId.value)]
+             const connectionKey = String(currentConnectionId.value)
+             const cached = connectionCache.value[connectionKey]
              if (cached) {
                  cached.tables[tableName] = res.data[tableName] || []
              }
-             if (connectionMetadata.value[String(currentConnectionId.value)]) {
-                  connectionMetadata.value[String(currentConnectionId.value)].tables[tableName] = res.data[tableName] || []
-             }
+             const metadata = connectionMetadata.value[connectionKey]
+             if (metadata) metadata.tables[tableName] = res.data[tableName] || []
         }
     } else {
       const message = res?.error || res?.message || `Failed to load columns for ${tableName}`
@@ -2770,6 +2789,7 @@ const toggleRelationshipQuery = () => {
   } else {
     isRelationshipQueryOpen.value = true
     isPatternConfigOpen.value = false
+    isAIRelationshipPanelOpen.value = false
   }
 }
 
@@ -2779,6 +2799,7 @@ const togglePatternConfig = () => {
   } else {
     isPatternConfigOpen.value = true
     isRelationshipQueryOpen.value = false
+    isAIRelationshipPanelOpen.value = false
   }
 }
 
@@ -2914,7 +2935,7 @@ const loadSavedView = async (viewId: string) => {
     isPreviewViewLoading.value = true
   }
   try {
-    const { success, data: view, error } = await $fetch(`/api/saved-views/${viewId}`)
+    const { success, data: view, error } = await $fetch<{ success: boolean; data?: any; error?: string }>(`/api/saved-views/${viewId}`)
 
     if (success && view && view.result) {
       let canvasAttempts = 0
@@ -3612,6 +3633,7 @@ onBeforeUnmount(() => {
             :connection-id="currentConnectionId"
             @close="isAIRelationshipPanelOpen = false"
             @add-edges="handleAddDetectedEdges"
+            @apply-profiles="handleApplyProfiles"
           />
         </div>
       </Transition>

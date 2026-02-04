@@ -126,7 +126,6 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -446,7 +445,7 @@ const saveView = async () => {
       })
     }
 
-    const { success, error } = await $fetch('/api/saved-views', {
+    const res: { success?: boolean; error?: string } = await $fetch('/api/saved-views', {
       method: 'POST',
       body: {
         name: viewName.value,
@@ -460,6 +459,7 @@ const saveView = async () => {
         projectId: route.query.projectId
       }
     })
+    const { success, error } = res
 
     if (!success) throw new Error(error)
     

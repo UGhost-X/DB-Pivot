@@ -3,6 +3,7 @@
 
 generator client {
   provider = "prisma-client-js"
+  output   = "../server/prisma-client"
 }
 
 datasource db {
@@ -15,69 +16,34 @@ model User {
   email       String       @unique
   password    String
   name        String?
-  avatar      String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   connections Connection[]
   canvases    Canvas[]
-  savedViews  SavedView[]
-  projects    Project[]
 
+  // Added relations
   tableRelationships TableRelationship[]
   patternRules       PatternRule[]
   deepQueries        DeepQuery[]
 }
 
-model Project {
-  id          Int          @id @default(autoincrement())
-  name        String
-  description String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  ownerId     Int
-  owner       User         @relation(fields: [ownerId], references: [id])
-
-  connections Connection[]
-  canvases    Canvas[]
-  savedViews  SavedView[]
-}
-
-model SavedView {
-  id          Int      @id @default(autoincrement())
-  name        String
-  config      Json
-  result      Json
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  projectId   Int?
-  project     Project? @relation(fields: [projectId], references: [id])
-
-  ownerId     Int
-  owner       User     @relation(fields: [ownerId], references: [id])
-}
-
 model Connection {
   id        Int      @id @default(autoincrement())
   name      String
-  type      String   // pg, mysql2, etc.
+  type      String // pg, mysql2, etc.
   host      String
   port      Int
-  user      String   // DB username
-  password  String   // DB password
+  user      String // DB username
+  password  String // DB password
   database  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
-  projectId Int?
-  project   Project? @relation(fields: [projectId], references: [id])
-
   canvases  Canvas[]
-  
-  ownerId   Int?
-  owner     User?    @relation(fields: [ownerId], references: [id])
 
+  ownerId Int?
+  owner   User? @relation(fields: [ownerId], references: [id])
+
+  // Added relations
   tableRelationships TableRelationship[]
   patternRules       PatternRule[]
   deepQueries        DeepQuery[]
@@ -89,30 +55,13 @@ model Canvas {
   id           Int         @id @default(autoincrement())
   name         String
   data         Json
-  
   connectionId Int?
   connection   Connection? @relation(fields: [connectionId], references: [id])
-  
-  projectId    Int?
-  project      Project?    @relation(fields: [projectId], references: [id])
-
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
-  
-  ownerId      Int?
-  owner        User?       @relation(fields: [ownerId], references: [id])
 
-  versions     CanvasVersion[]
-}
-
-model CanvasVersion {
-  id        Int      @id @default(autoincrement())
-  name      String
-  data      Json
-  createdAt DateTime @default(now())
-  
-  canvasId  Int
-  canvas    Canvas   @relation(fields: [canvasId], references: [id])
+  ownerId Int?
+  owner   User? @relation(fields: [ownerId], references: [id])
 }
 
 model TableRelationship {
@@ -120,24 +69,31 @@ model TableRelationship {
   name        String?
   description String?
 
+  // Relationship details
   sourceTable      String
   sourceColumn     String
   targetTable      String
   targetColumn     String
   relationshipType TableRelationshipType
 
+  // Detection method
   detectionMethod DetectionMethod
   confidence      Float?          @default(1.0)
-  constraintName  String?
 
+  // Foreign key constraints (if available)
+  constraintName String?
+
+  // Connection reference
   connectionId Int
   connection   Connection @relation(fields: [connectionId], references: [id])
 
+  // Metadata
   isActive  Boolean  @default(true)
   isCustom  Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relationships to pattern rules and queries
   patternRuleId Int?
   patternRule   PatternRule? @relation(fields: [patternRuleId], references: [id])
 
@@ -153,20 +109,24 @@ model PatternRule {
   name        String
   description String?
 
+  // Pattern matching rules
   sourcePattern    String
   targetPattern    String
   relationshipType TableRelationshipType
   priority         Int                   @default(0)
 
+  // Validation rules
   isEnabled     Boolean @default(true)
   minConfidence Float?  @default(0.7)
 
+  // Connection scope (null means global)
   connectionId Int?
   connection   Connection? @relation(fields: [connectionId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relationships
   tableRelationships TableRelationship[]
 
   ownerId Int?
@@ -180,25 +140,30 @@ model DeepQuery {
   name        String
   description String?
 
+  // Query configuration
   startTable     String
-  startCondition Json?
+  startCondition Json? // JSON object for WHERE conditions
   maxDepth       Int    @default(5)
-  includeFields  Json?
-  excludeFields  Json?
+  includeFields  Json? // JSON array of fields to include
+  excludeFields  Json? // JSON array of fields to exclude
 
+  // Connection reference
   connectionId Int
   connection   Connection @relation(fields: [connectionId], references: [id])
 
+  // Performance settings
   useCache      Boolean @default(true)
-  cacheDuration Int?    @default(300)
+  cacheDuration Int?    @default(300) // seconds
 
+  // Metadata
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Query results (cached)
   lastResult     Json?
   lastExecutedAt DateTime?
-  executionTime  Int?
+  executionTime  Int? // milliseconds
 
   ownerId Int?
   owner   User? @relation(fields: [ownerId], references: [id])
@@ -212,6 +177,7 @@ model QueryCache {
   queryData Json
   result    Json
 
+  // Connection reference
   connectionId Int
   connection   Connection @relation(fields: [connectionId], references: [id])
 
@@ -228,16 +194,19 @@ model ColumnProfile {
   tableName    String
   columnName   String
 
-  distinctCount BigInt
+  // Stats
+  distinctCount BigInt // Use BigInt for large tables
   totalCount    BigInt
   min           String?
   max           String?
   nullCount     BigInt? @default(0)
 
+  // JSON data for samples
   sampleValues Json
 
+  // Metadata
   lastUpdated DateTime @default(now())
-  strategy    String
+  strategy    String // 'full' or 'sample'
   rowEstimate BigInt?
 
   @@unique([connectionId, tableName, columnName])
